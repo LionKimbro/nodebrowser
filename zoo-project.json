@@ -1,0 +1,13 @@
+{
+  "zookeep-project-guid": "6987b922-2e44-4cb7-b62a-dfb10d4dadbc",
+  "name": "nodebrowser",
+  "repo-type": "python-2026-03",
+  "license": "CC0-1.0",
+  "repository": {
+    "name": "nodebrowser",
+    "visibility": "public"
+  },
+  "python-package": {
+    "name": "nodebrowser"
+  }
+}
