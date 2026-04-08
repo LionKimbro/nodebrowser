@@ -7,7 +7,9 @@
   "implemented": [
     "Three-file architecture: lionscliapp bootloader, tkinter UI framing, copyable main module.",
     "Canvas attach/detach and redraw lifecycle.",
+    "Tokenizer registry and per-cycle tokenizer phase.",
     "RAW/DERIVED snapshots for the initial event surface.",
+    "Derived interaction facts for pointer delta, drag lifecycle, hit testing, and empty-space detection.",
     "Minimal judge with resource holds and pointer exclusivity.",
     "Dict-based organisms for focus, mode key, node creation, node click selection, single-node drag, marquee/group selection, group drag, edge creation, empty click clear, and delete.",
     "Real effect queue with explicit apply step.",
@@ -17,10 +19,12 @@
   "deferred": [
     "Viewport panning.",
     "Projection-only preview effects.",
-    "More sophisticated judge maintenance and richer resource protocols."
+    "More sophisticated judge maintenance and richer resource protocols.",
+    "Incremental organism-by-organism migration from RAW/interaction consumption to DERIVED consumption."
   ],
   "notes": [
     "Judge is intentionally minimal and rewriteable.",
-    "Organisms are the long-lived structure; the judge currently only models what the first slice needs."
+    "Organisms are the long-lived structure; the judge currently only models what the first slice needs.",
+    "Tokenizer introduction is intentionally incremental; node-drag is the first organism moved to DERIVED."
   ]
 }

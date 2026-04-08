@@ -43,6 +43,17 @@ raw_prev = {
 }
 
 derived = {
+    "pointer_dx": 0,
+    "pointer_dy": 0,
+    "press_started": False,
+    "press_released": False,
+    "drag_started": False,
+    "dragging": False,
+    "drag_ended": False,
+    "hover_node_id": None,
+    "press_node_id": None,
+    "over_empty": True,
+    "drag_rect": None,
     "drag_distance": 0,
     "drag_threshold_crossed": False,
 }
@@ -112,6 +123,7 @@ coordination = {
 }
 
 current_organism = None
+tokenizers = []
 
 
 def _make_organism(name, fn):
@@ -125,7 +137,33 @@ def _make_organism(name, fn):
     }
 
 
+def _make_tokenizer(name, fn):
+    return {
+        "NAME": name,
+        "ACTIVE": True,
+        "FN": fn,
+    }
+
+
 organisms = []
+
+
+def _derived_defaults():
+    return {
+        "pointer_dx": 0,
+        "pointer_dy": 0,
+        "press_started": False,
+        "press_released": False,
+        "drag_started": False,
+        "dragging": False,
+        "drag_ended": False,
+        "hover_node_id": None,
+        "press_node_id": None,
+        "over_empty": True,
+        "drag_rect": None,
+        "drag_distance": 0,
+        "drag_threshold_crossed": False,
+    }
 
 
 def reset_runtime():
@@ -157,8 +195,30 @@ def reset_runtime():
         target["pointer_node_id"] = None
 
     derived["drag_distance"] = 0
+    derived["pointer_dx"] = 0
+    derived["pointer_dy"] = 0
+    derived["press_started"] = False
+    derived["press_released"] = False
+    derived["drag_started"] = False
+    derived["dragging"] = False
+    derived["drag_ended"] = False
+    derived["hover_node_id"] = None
+    derived["press_node_id"] = None
+    derived["over_empty"] = True
+    derived["drag_rect"] = None
     derived["drag_threshold_crossed"] = False
     derived_prev["drag_distance"] = 0
+    derived_prev["pointer_dx"] = 0
+    derived_prev["pointer_dy"] = 0
+    derived_prev["press_started"] = False
+    derived_prev["press_released"] = False
+    derived_prev["drag_started"] = False
+    derived_prev["dragging"] = False
+    derived_prev["drag_ended"] = False
+    derived_prev["hover_node_id"] = None
+    derived_prev["press_node_id"] = None
+    derived_prev["over_empty"] = True
+    derived_prev["drag_rect"] = None
     derived_prev["drag_threshold_crossed"] = False
 
     interaction["mouse_down_x"] = 0
@@ -185,7 +245,17 @@ def reset_runtime():
     coordination["resource-holds"] = {}
     coordination["leases"] = {}
 
+    _init_tokenizers()
     _init_organisms()
+
+
+def _init_tokenizers():
+    tokenizers[:] = [
+        _make_tokenizer("pointer-delta-tokenizer", _run_pointer_delta_tokenizer),
+        _make_tokenizer("drag-lifecycle-tokenizer", _run_drag_lifecycle_tokenizer),
+        _make_tokenizer("hit-test-tokenizer", _run_hit_test_tokenizer),
+        _make_tokenizer("empty-space-tokenizer", _run_empty_space_tokenizer),
+    ]
 
 
 def _init_organisms():
@@ -360,10 +430,59 @@ def _update_raw(event_name, event):
 
 
 def _refresh_derived():
+    return
+
+
+def run_tokenizers():
+    derived.clear()
+    derived.update(_derived_defaults())
+    for tokenizer in tokenizers:
+        if tokenizer["ACTIVE"]:
+            tokenizer["FN"]()
+
+
+def _run_pointer_delta_tokenizer():
+    derived["pointer_dx"] = raw["x"] - raw_prev["x"]
+    derived["pointer_dy"] = raw["y"] - raw_prev["y"]
+
+
+def _run_drag_lifecycle_tokenizer():
     dx = raw["x"] - interaction["mouse_down_x"]
     dy = raw["y"] - interaction["mouse_down_y"]
-    derived["drag_distance"] = math.hypot(dx, dy)
-    derived["drag_threshold_crossed"] = derived["drag_distance"] >= render["drag_threshold"]
+    drag_distance = math.hypot(dx, dy)
+    drag_threshold_crossed = drag_distance >= render["drag_threshold"]
+
+    derived["press_started"] = raw["event_name"] == "button-1-press"
+    derived["press_released"] = raw["event_name"] == "button-1-release"
+    derived["drag_distance"] = drag_distance
+    derived["drag_threshold_crossed"] = drag_threshold_crossed
+    derived["drag_started"] = (
+        raw["event_name"] == "button-1-motion"
+        and drag_threshold_crossed
+        and not derived_prev["drag_threshold_crossed"]
+    )
+    derived["dragging"] = raw["event_name"] == "button-1-motion" and drag_threshold_crossed
+    derived["drag_ended"] = raw["event_name"] == "button-1-release" and derived_prev["drag_threshold_crossed"]
+
+    if (
+        raw["event_name"] in ("button-1-motion", "button-1-release")
+        and drag_threshold_crossed
+    ):
+        derived["drag_rect"] = {
+            "x1": interaction["mouse_down_x"],
+            "y1": interaction["mouse_down_y"],
+            "x2": raw["x"],
+            "y2": raw["y"],
+        }
+
+
+def _run_hit_test_tokenizer():
+    derived["hover_node_id"] = raw["pointer_node_id"]
+    derived["press_node_id"] = interaction["press_node_id"]
+
+
+def _run_empty_space_tokenizer():
+    derived["over_empty"] = raw["pointer_node_id"] is None
 
 
 def run_cycle():
@@ -372,6 +491,7 @@ def run_cycle():
     if canvas_widget is None or graph_data is None:
         return
 
+    run_tokenizers()
     maintain_judge()
 
     for organism in organisms:
@@ -753,7 +873,10 @@ def make_edge(from_id, to_id):
 
 def _draw_transient_overlays():
     marquee = transient_effects.get("preview-marquee")
-    if marquee is None:
+    if derived.get("drag_rect") is None:
+        transient_effects.pop("preview-marquee", None)
+        canvas_items["marquee_item"] = None
+    elif marquee is None:
         canvas_items["marquee_item"] = None
     else:
         canvas_items["marquee_item"] = canvas_widget.create_rectangle(
@@ -794,11 +917,14 @@ def _draw_transient_overlays():
 
 
 def _get_preview_group_selection_ids():
-    marquee = transient_effects.get("preview-marquee")
-    if marquee is None or graph_data is None:
+    drag_rect = derived.get("drag_rect")
+    if drag_rect is None or graph_data is None:
         return set()
 
-    return set(_find_nodes_in_rect(marquee["x1"], marquee["y1"], marquee["x2"], marquee["y2"]))
+    if derived["press_node_id"] is not None:
+        return set()
+
+    return set(_find_nodes_in_rect(drag_rect["x1"], drag_rect["y1"], drag_rect["x2"], drag_rect["y2"]))
 
 
 def _run_pointer_focus_organism(organism):
@@ -1051,7 +1177,7 @@ def _run_node_drag_organism(organism):
         interaction["drag_node_id"] = None
         return
 
-    if raw["event_name"] != "button-1-motion":
+    if not derived["dragging"]:
         if organism["STATE"] == "DRAGGING":
             organism["HELD"] = {"node": interaction["drag_node_id"]}
         else:
@@ -1065,14 +1191,8 @@ def _run_node_drag_organism(organism):
         interaction["drag_node_id"] = None
         return
 
-    node_id = interaction["press_node_id"]
+    node_id = derived["press_node_id"]
     if node_id is None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["drag_node_id"] = None
-        return
-
-    if not derived["drag_threshold_crossed"]:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         interaction["drag_node_id"] = None
@@ -1093,89 +1213,51 @@ def _run_node_drag_organism(organism):
     organism["STATE"] = "DRAGGING"
     organism["HELD"] = {"node": drag_node_id}
 
-    dx = raw["x"] - raw_prev["x"]
-    dy = raw["y"] - raw_prev["y"]
+    dx = derived["pointer_dx"]
+    dy = derived["pointer_dy"]
     if dx or dy:
         emit_effect("move-node", {"node_id": drag_node_id, "dx": dx, "dy": dy})
 
 
 def _run_marquee_select_organism(organism):
     if g["mode"] != "IDLE":
-        if organism["STATE"] != "IDLE":
-            emit_effect("clear-preview-marquee")
-            _release_lease(organism["NAME"])
+        emit_effect("clear-preview-marquee")
+        return
+
+    is_marquee_drag = derived["drag_rect"] is not None and derived["press_node_id"] is None
+    marquee_finished = derived["drag_ended"] and derived["press_node_id"] is None
+
+    if not is_marquee_drag and not marquee_finished:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        emit_effect("clear-preview-marquee")
+        return
+
+    if is_marquee_drag:
+        request_type = "HOLD-RESOURCE" if coordination["leases"].get(organism["NAME"]) else "START"
+        if not get_permission(request_type, ["pointer", "group-selection"]):
+            return
+
+        organism["STATE"] = "DRAGGING"
+        organism["HELD"] = {"marquee": True}
+        interaction["marquee_start"] = (derived["drag_rect"]["x1"], derived["drag_rect"]["y1"])
+        interaction["marquee_end"] = (derived["drag_rect"]["x2"], derived["drag_rect"]["y2"])
+        emit_effect("preview-marquee", derived["drag_rect"])
+
+    if marquee_finished:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         interaction["marquee_start"] = None
         interaction["marquee_end"] = None
-        return
-
-    if raw["event_name"] == "button-1-release":
-        if organism["STATE"] == "DRAGGING":
+        emit_effect("clear-preview-marquee")
+        if derived["drag_rect"] is not None:
             node_ids = _find_nodes_in_rect(
-                interaction["marquee_start"][0],
-                interaction["marquee_start"][1],
-                raw["x"],
-                raw["y"],
+                derived["drag_rect"]["x1"],
+                derived["drag_rect"]["y1"],
+                derived["drag_rect"]["x2"],
+                derived["drag_rect"]["y2"],
             )
             emit_effect("set-group-selection", {"node_ids": node_ids})
-            emit_effect("clear-preview-marquee")
-            _release_lease(organism["NAME"])
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["marquee_start"] = None
-        interaction["marquee_end"] = None
-        return
-
-    if raw["event_name"] != "button-1-motion":
-        if organism["STATE"] == "DRAGGING":
-            organism["HELD"] = {"marquee": True}
-        else:
-            organism["STATE"] = "IDLE"
-            organism["HELD"] = {}
-        return
-
-    if interaction["ignore_release"] or interaction["press_consumed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["marquee_start"] = None
-        interaction["marquee_end"] = None
-        return
-
-    if interaction["press_node_id"] is not None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["marquee_start"] = None
-        interaction["marquee_end"] = None
-        return
-
-    if not derived["drag_threshold_crossed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["marquee_start"] = None
-        interaction["marquee_end"] = None
-        return
-
-    if organism["STATE"] != "DRAGGING":
-        if not get_permission("START", ["pointer", "group-selection"]):
-            return
-        interaction["marquee_start"] = (interaction["mouse_down_x"], interaction["mouse_down_y"])
-
-    if not get_permission("HOLD-RESOURCE", ["pointer", "group-selection"]):
-        return
-
-    organism["STATE"] = "DRAGGING"
-    organism["HELD"] = {"marquee": True}
-    interaction["marquee_end"] = (raw["x"], raw["y"])
-    emit_effect(
-        "preview-marquee",
-        {
-            "x1": interaction["marquee_start"][0],
-            "y1": interaction["marquee_start"][1],
-            "x2": raw["x"],
-            "y2": raw["y"],
-        },
-    )
 
 
 def _run_node_click_select_organism(organism):
