@@ -554,6 +554,171 @@ def test_marquee_drag_selects_group_and_releases_judge_holds():
     run_suite()
 
 
+def test_shift_empty_drag_pans_viewport_instead_of_marquee():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_press_empty_with_shift():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=40, y=40, state=1))
+        return ("next", None)
+
+    def step_drag_pan():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=70, y=65, state=1))
+        return ("next", None)
+
+    def step_assert_panning():
+        if core.coordination["pointer-owner"] != "pan-organism":
+            return ("fail", "shift-empty drag should grant pointer ownership to pan-organism")
+        if core.coordination["resource-holds"].get("viewport") != "pan-organism":
+            return ("fail", "shift-empty drag should grant viewport ownership to pan-organism")
+        if (core.viewport["offset_x"], core.viewport["offset_y"]) != (30, 25):
+            return ("fail", "panning should move the viewport by the pointer delta")
+        if core.canvas_items["marquee_item"] is not None:
+            return ("fail", "shift-empty drag should not show a marquee preview")
+        coords = APP_STATE["app"]["canvas"].coords(core.canvas_items["node_items_by_id"]["node-0001"]["outer"])
+        if coords != [185.0, 160.0, 235.0, 210.0]:
+            return ("fail", "node projection should shift by the viewport offset during pan")
+        return ("next", None)
+
+    def step_release():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=70, y=65, state=1))
+        return ("next", None)
+
+    def step_assert_release():
+        if core.coordination["pointer-owner"] is not None:
+            return ("fail", "judge should release pointer ownership after panning")
+        if core.coordination["resource-holds"]:
+            return ("fail", "judge should clear pan holds after release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "shift empty drag pans viewport",
+        [
+            step_focus_canvas,
+            step_press_empty_with_shift,
+            step_drag_pan,
+            step_assert_panning,
+            step_release,
+            step_assert_release,
+        ],
+    )
+    run_suite()
+
+
+def test_click_hit_testing_uses_viewport_offset_after_pan():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_seed_viewport_offset():
+        core.viewport["offset_x"] = 30
+        core.viewport["offset_y"] = 25
+        core.redraw_all()
+        return ("next", None)
+
+    def step_click_shifted_node():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=210, y=185))
+        core.handle_button_release_1(make_event(app["canvas"], x=210, y=185))
+        return ("next", None)
+
+    def step_assert_selected():
+        if core.g["selected_node_id"] != "node-0001":
+            return ("fail", "hit testing should account for viewport offset when selecting nodes")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "viewport-aware hit testing",
+        [
+            step_focus_canvas,
+            step_seed_viewport_offset,
+            step_click_shifted_node,
+            step_assert_selected,
+        ],
+    )
+    run_suite()
+
+
+def test_marquee_selection_commit_uses_viewport_offset_after_pan():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 360, "y": 260},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_seed_viewport_offset():
+        core.viewport["offset_x"] = 30
+        core.viewport["offset_y"] = 25
+        core.redraw_all()
+        return ("next", None)
+
+    def step_press_empty():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=150, y=140))
+        return ("next", None)
+
+    def step_drag_marquee():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=250, y=210))
+        return ("next", None)
+
+    def step_release_marquee():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=250, y=210))
+        return ("next", None)
+
+    def step_assert_selection():
+        if core.selection["group_selected_ids"] != ["node-0001"]:
+            return ("fail", "marquee commit should use screen-space viewport-adjusted hit testing")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "viewport-aware marquee commit",
+        [
+            step_focus_canvas,
+            step_seed_viewport_offset,
+            step_press_empty,
+            step_drag_marquee,
+            step_release_marquee,
+            step_assert_selection,
+        ],
+    )
+    run_suite()
+
+
 def test_empty_click_clears_group_selection_too():
     global TEST_GRAPH
 

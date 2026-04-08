@@ -85,6 +85,11 @@ selection = {
     "group_selected_ids": [],
 }
 
+viewport = {
+    "offset_x": 0,
+    "offset_y": 0,
+}
+
 render = {
     "node_radius": 25,
     "selected_inner_radius": 20,
@@ -193,6 +198,9 @@ def reset_runtime():
     g["quantizing"] = False
     g["active_canvas_name"] = None
 
+    viewport["offset_x"] = 0
+    viewport["offset_y"] = 0
+
     for target in (raw, raw_prev):
         target["event_name"] = None
         target["x"] = 0
@@ -282,6 +290,7 @@ def _init_organisms():
         _make_organism("layout-key-organism", _run_layout_key_organism),
         _make_organism("node-create-organism", _run_node_create_organism),
         _make_organism("edge-create-organism", _run_edge_create_organism),
+        _make_organism("pan-organism", _run_pan_organism),
         _make_organism("group-drag-organism", _run_group_drag_organism),
         _make_organism("node-drag-organism", _run_node_drag_organism),
         _make_organism("marquee-select-organism", _run_marquee_select_organism),
@@ -603,6 +612,10 @@ def _judge_denies_start(owner, requested):
     if owner == "edge-create-organism":
         return False
 
+    if owner == "marquee-select-organism":
+        if raw["shift_down"] and interaction["press_node_id"] is None:
+            return True
+
     if owner in ("node-drag-organism", "group-drag-organism"):
         if raw["shift_down"] and interaction["press_node_id"] is not None:
             return True
@@ -642,6 +655,14 @@ def _clear_group_drag_interaction():
 
 def _clear_node_drag_interaction():
     interaction["drag_node_id"] = None
+
+
+def _world_to_screen(x, y):
+    return x + viewport["offset_x"], y + viewport["offset_y"]
+
+
+def _screen_to_world(x, y):
+    return x - viewport["offset_x"], y - viewport["offset_y"]
 
 
 def _quantize_value(value):
@@ -689,6 +710,9 @@ def apply_effects():
             g["mode"] = payload["mode"]
         elif effect_type == "toggle-quantizing":
             g["quantizing"] = not g["quantizing"]
+        elif effect_type == "pan-viewport":
+            viewport["offset_x"] += payload["dx"]
+            viewport["offset_y"] += payload["dy"]
         elif effect_type == "move-group":
             move_group_by(payload["node_ids"], payload["dx"], payload["dy"])
             changed_graph = True
@@ -789,10 +813,12 @@ def _draw_edge(edge):
 
     radius = render["node_radius"]
     pull = render["edge_vertical_pull"]
-    p0 = (from_node["x"], from_node["y"] + radius)
-    p1 = (from_node["x"], from_node["y"] + radius + pull)
-    p2 = (to_node["x"], to_node["y"] - radius - pull)
-    p3 = (to_node["x"], to_node["y"] - radius)
+    from_x, from_y = _world_to_screen(from_node["x"], from_node["y"])
+    to_x, to_y = _world_to_screen(to_node["x"], to_node["y"])
+    p0 = (from_x, from_y + radius)
+    p1 = (from_x, from_y + radius + pull)
+    p2 = (to_x, to_y - radius - pull)
+    p3 = (to_x, to_y - radius)
 
     return canvas_widget.create_line(
         p0[0], p0[1],
@@ -806,8 +832,7 @@ def _draw_edge(edge):
 
 
 def _draw_node(node, frame_effects):
-    x = node["x"]
-    y = node["y"]
+    x, y = _world_to_screen(node["x"], node["y"])
     radius = render["node_radius"]
     preview_ids = _get_preview_group_selection_ids(frame_effects)
 
@@ -871,8 +896,9 @@ def find_node_at(x, y):
     nodes.reverse()
 
     for node in nodes:
-        dx = x - node["x"]
-        dy = y - node["y"]
+        screen_x, screen_y = _world_to_screen(node["x"], node["y"])
+        dx = x - screen_x
+        dy = y - screen_y
         if math.hypot(dx, dy) <= radius:
             return node["id"]
 
@@ -889,7 +915,8 @@ def set_group_selection(node_ids):
 def create_node_at(x, y, node_id=None):
     """Create a node and redraw."""
 
-    emit_effect("create-node", {"x": x, "y": y, "node_id": node_id})
+    world_x, world_y = _screen_to_world(x, y)
+    emit_effect("create-node", {"x": world_x, "y": world_y, "node_id": node_id})
     apply_effects()
 
 
@@ -1094,8 +1121,9 @@ def _draw_transient_overlays(frame_effects):
 
     radius = render["node_radius"]
     pull = render["edge_vertical_pull"]
-    p0 = (source["x"], source["y"] + radius)
-    p1 = (source["x"], source["y"] + radius + pull)
+    source_x, source_y = _world_to_screen(source["x"], source["y"])
+    p0 = (source_x, source_y + radius)
+    p1 = (source_x, source_y + radius + pull)
     p2 = (preview_edge["to_x"], preview_edge["to_y"] - pull)
     p3 = (preview_edge["to_x"], preview_edge["to_y"])
 
@@ -1116,7 +1144,7 @@ def _get_preview_group_selection_ids(frame_effects):
     if drag_rect is None or graph_data is None:
         return set()
 
-    return set(_find_nodes_in_rect(drag_rect["x1"], drag_rect["y1"], drag_rect["x2"], drag_rect["y2"]))
+    return set(_find_nodes_in_screen_rect(drag_rect["x1"], drag_rect["y1"], drag_rect["x2"], drag_rect["y2"]))
 
 
 def _run_pointer_focus_organism(organism):
@@ -1207,6 +1235,42 @@ def _run_layout_key_organism(organism):
     )
 
 
+def _run_pan_organism(organism):
+    if raw["event_name"] == "button-1-release":
+        notify_done(organism)
+        return
+
+    if raw["event_name"] != "button-1-motion":
+        return
+
+    if interaction["ignore_release"] or interaction["press_consumed"]:
+        notify_done(organism)
+        return
+
+    if not raw["shift_down"]:
+        notify_done(organism)
+        return
+
+    if interaction["press_node_id"] is not None:
+        notify_done(organism)
+        return
+
+    if not derived["drag_threshold_crossed"]:
+        if organism["STATE"] != "ACTIVE":
+            organism["STATE"] = "IDLE"
+        return
+
+    if organism["STATE"] != "ACTIVE":
+        if not get_permission("START", ["pointer", "viewport"]):
+            return
+        organism["STATE"] = "ACTIVE"
+
+    dx = derived["pointer_dx"]
+    dy = derived["pointer_dy"]
+    if dx or dy:
+        emit_effect("pan-viewport", {"dx": dx, "dy": dy})
+
+
 def _run_node_create_organism(organism):
     if raw["event_name"] != "button-1-release":
         return
@@ -1223,8 +1287,7 @@ def _run_node_create_organism(organism):
     if not get_permission("START", ["selection:single"]):
         return
 
-    node_x = raw["x"]
-    node_y = raw["y"]
+    node_x, node_y = _screen_to_world(raw["x"], raw["y"])
     if g["quantizing"]:
         node_x, node_y = _quantize_point(node_x, node_y)
 
@@ -1452,7 +1515,7 @@ def _run_marquee_select_organism(organism):
         return
 
     if derived["press_released"]:
-        node_ids = _find_nodes_in_rect(
+        node_ids = _find_nodes_in_screen_rect(
             drag_rect["x1"],
             drag_rect["y1"],
             drag_rect["x2"],
@@ -1528,6 +1591,21 @@ def _find_nodes_in_rect(x1, y1, x2, y2):
 
     for node_id, node in graph_data["nodes"].items():
         if left <= node["x"] <= right and top <= node["y"] <= bottom:
+            node_ids.append(node_id)
+
+    return node_ids
+
+
+def _find_nodes_in_screen_rect(x1, y1, x2, y2):
+    left = min(x1, x2)
+    right = max(x1, x2)
+    top = min(y1, y2)
+    bottom = max(y1, y2)
+    node_ids = []
+
+    for node_id, node in graph_data["nodes"].items():
+        screen_x, screen_y = _world_to_screen(node["x"], node["y"])
+        if left <= screen_x <= right and top <= screen_y <= bottom:
             node_ids.append(node_id)
 
     return node_ids
