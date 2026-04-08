@@ -61,6 +61,8 @@ interaction = {
     "group_drag_origin": None,
     "marquee_start": None,
     "marquee_end": None,
+    "edge_drag_source_id": None,
+    "edge_drag_current_pos": None,
     "press_node_id": None,
     "press_consumed": False,
     "ignore_release": False,
@@ -92,6 +94,8 @@ render = {
     "group_preview_halo_width": 2,
     "group_preview_halo_radius_offset": 6,
     "edge_vertical_pull": 60,
+    "preview_edge_color": "#7fdfff",
+    "preview_edge_width": 2,
     "drag_threshold": 4,
 }
 
@@ -165,6 +169,8 @@ def reset_runtime():
     interaction["group_drag_origin"] = None
     interaction["marquee_start"] = None
     interaction["marquee_end"] = None
+    interaction["edge_drag_source_id"] = None
+    interaction["edge_drag_current_pos"] = None
     interaction["press_node_id"] = None
     interaction["press_consumed"] = False
     interaction["ignore_release"] = False
@@ -189,6 +195,7 @@ def _init_organisms():
         _make_organism("pointer-focus-organism", _run_pointer_focus_organism),
         _make_organism("mode-key-organism", _run_mode_key_organism),
         _make_organism("node-create-organism", _run_node_create_organism),
+        _make_organism("edge-create-organism", _run_edge_create_organism),
         _make_organism("group-drag-organism", _run_group_drag_organism),
         _make_organism("node-drag-organism", _run_node_drag_organism),
         _make_organism("marquee-select-organism", _run_marquee_select_organism),
@@ -460,10 +467,17 @@ def apply_effects():
         elif effect_type == "move-node":
             move_node_by(payload["node_id"], payload["dx"], payload["dy"])
             changed_graph = True
+        elif effect_type == "create-edge":
+            make_edge(payload["from"], payload["to"])
+            changed_graph = True
         elif effect_type == "preview-marquee":
             transient_effects["preview-marquee"] = dict(payload)
         elif effect_type == "clear-preview-marquee":
             transient_effects.pop("preview-marquee", None)
+        elif effect_type == "preview-edge":
+            transient_effects["preview-edge"] = dict(payload)
+        elif effect_type == "clear-preview-edge":
+            transient_effects.pop("preview-edge", None)
         elif effect_type == "create-node":
             node_id = payload.get("node_id") or _generate_node_id()
             graph_data["nodes"][node_id] = {
@@ -711,20 +725,51 @@ def move_group_by(node_ids, dx, dy):
         move_node_by(node_id, dx, dy)
 
 
+def make_edge(from_id, to_id):
+    """Append an edge to graph data."""
+
+    graph_data["edges"].append({"from": from_id, "to": to_id})
+
+
 def _draw_transient_overlays():
     marquee = transient_effects.get("preview-marquee")
     if marquee is None:
         canvas_items["marquee_item"] = None
+    else:
+        canvas_items["marquee_item"] = canvas_widget.create_rectangle(
+            marquee["x1"],
+            marquee["y1"],
+            marquee["x2"],
+            marquee["y2"],
+            outline=render["marquee_outline_color"],
+            width=render["marquee_outline_width"],
+            dash=tuple(render["marquee_dash"]),
+        )
+
+    preview_edge = transient_effects.get("preview-edge")
+    if preview_edge is None:
         return
 
-    canvas_items["marquee_item"] = canvas_widget.create_rectangle(
-        marquee["x1"],
-        marquee["y1"],
-        marquee["x2"],
-        marquee["y2"],
-        outline=render["marquee_outline_color"],
-        width=render["marquee_outline_width"],
-        dash=tuple(render["marquee_dash"]),
+    source = graph_data["nodes"].get(preview_edge["from"])
+    if source is None:
+        return
+
+    radius = render["node_radius"]
+    pull = render["edge_vertical_pull"]
+    p0 = (source["x"], source["y"] + radius)
+    p1 = (source["x"], source["y"] + radius + pull)
+    p2 = (preview_edge["to_x"], preview_edge["to_y"] - pull)
+    p3 = (preview_edge["to_x"], preview_edge["to_y"])
+
+    canvas_widget.create_line(
+        p0[0], p0[1],
+        p1[0], p1[1],
+        p2[0], p2[1],
+        p3[0], p3[1],
+        fill=render["preview_edge_color"],
+        smooth=True,
+        width=render["preview_edge_width"],
+        dash=(4, 4),
     )
 
 
@@ -818,6 +863,89 @@ def _run_node_create_organism(organism):
     emit_effect("set-mode", {"mode": "IDLE"})
 
 
+def _run_edge_create_organism(organism):
+    if g["mode"] != "IDLE":
+        if organism["STATE"] != "IDLE":
+            emit_effect("clear-preview-edge")
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["edge_drag_source_id"] = None
+        interaction["edge_drag_current_pos"] = None
+        return
+
+    if raw["event_name"] == "button-1-release":
+        if organism["STATE"] == "DRAGGING":
+            target_id = raw["pointer_node_id"]
+            source_id = interaction["edge_drag_source_id"]
+            if target_id is not None and source_id is not None and target_id != source_id:
+                emit_effect("create-edge", {"from": source_id, "to": target_id})
+            emit_effect("clear-preview-edge")
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["edge_drag_source_id"] = None
+        interaction["edge_drag_current_pos"] = None
+        return
+
+    if raw["event_name"] != "button-1-motion":
+        if organism["STATE"] == "DRAGGING":
+            organism["HELD"] = {"source": interaction["edge_drag_source_id"]}
+        else:
+            organism["STATE"] = "IDLE"
+            organism["HELD"] = {}
+        return
+
+    if interaction["ignore_release"] or interaction["press_consumed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["edge_drag_source_id"] = None
+        interaction["edge_drag_current_pos"] = None
+        return
+
+    if not raw["shift_down"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["edge_drag_source_id"] = None
+        interaction["edge_drag_current_pos"] = None
+        return
+
+    source_id = interaction["press_node_id"]
+    if source_id is None:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["edge_drag_source_id"] = None
+        interaction["edge_drag_current_pos"] = None
+        return
+
+    if not derived["drag_threshold_crossed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["edge_drag_source_id"] = None
+        interaction["edge_drag_current_pos"] = None
+        return
+
+    if organism["STATE"] != "DRAGGING":
+        if not get_permission("START", ["pointer", "edge-create"]):
+            return
+        interaction["edge_drag_source_id"] = source_id
+
+    if not get_permission("HOLD-RESOURCE", ["pointer", "edge-create"]):
+        return
+
+    organism["STATE"] = "DRAGGING"
+    organism["HELD"] = {"source": interaction["edge_drag_source_id"]}
+    interaction["edge_drag_current_pos"] = (raw["x"], raw["y"])
+    emit_effect(
+        "preview-edge",
+        {
+            "from": interaction["edge_drag_source_id"],
+            "to_x": raw["x"],
+            "to_y": raw["y"],
+        },
+    )
+
+
 def _run_group_drag_organism(organism):
     if g["mode"] != "IDLE":
         if organism["STATE"] != "IDLE":
@@ -844,6 +972,12 @@ def _run_group_drag_organism(organism):
         return
 
     if interaction["ignore_release"] or interaction["press_consumed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["group_drag_origin"] = None
+        return
+
+    if raw["shift_down"]:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         interaction["group_drag_origin"] = None
@@ -912,6 +1046,12 @@ def _run_node_drag_organism(organism):
         return
 
     if interaction["ignore_release"] or interaction["press_consumed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["drag_node_id"] = None
+        return
+
+    if raw["shift_down"]:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         interaction["drag_node_id"] = None

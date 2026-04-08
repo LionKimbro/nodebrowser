@@ -543,3 +543,123 @@ def test_group_drag_moves_all_group_selected_nodes():
         ],
     )
     run_suite()
+
+
+def test_shift_drag_creates_edge_with_preview_and_judge_holds():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 340, "y": 260},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_press_source():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=180, y=160, state=1))
+        return ("next", None)
+
+    def step_drag_preview():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=340, y=260, state=1))
+        return ("next", None)
+
+    def step_assert_preview():
+        if core.coordination["pointer-owner"] != "edge-create-organism":
+            return ("fail", "judge should grant pointer ownership during edge creation")
+        if core.coordination["resource-holds"].get("edge-create") != "edge-create-organism":
+            return ("fail", "judge should grant edge-create ownership during preview drag")
+        if core.transient_effects.get("preview-edge") is None:
+            return ("fail", "edge creation should render a live preview during drag")
+        if core.interaction["edge_drag_source_id"] != "node-0001":
+            return ("fail", "edge creation should remember its source node")
+        return ("next", None)
+
+    def step_release_on_target():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=340, y=260, state=1))
+        return ("next", None)
+
+    def step_assert_edge_created():
+        edges = APP_STATE["app"]["graph_data"]["edges"]
+        if edges != [{"from": "node-0001", "to": "node-0002"}]:
+            return ("fail", "shift-drag release over a target node should create one edge")
+        if core.coordination["pointer-owner"] is not None:
+            return ("fail", "judge should release pointer ownership after edge creation")
+        if core.coordination["resource-holds"]:
+            return ("fail", "judge should clear edge-create holds after release")
+        if core.transient_effects.get("preview-edge") is not None:
+            return ("fail", "preview edge should clear after release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "edge create",
+        [
+            step_focus_canvas,
+            step_press_source,
+            step_drag_preview,
+            step_assert_preview,
+            step_release_on_target,
+            step_assert_edge_created,
+        ],
+    )
+    run_suite()
+
+
+def test_shift_drag_release_off_target_cancels_edge_creation():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 340, "y": 260},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_press_source():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=180, y=160, state=1))
+        return ("next", None)
+
+    def step_drag_preview():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=260, y=210, state=1))
+        return ("next", None)
+
+    def step_release_off_target():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=260, y=210, state=1))
+        return ("next", None)
+
+    def step_assert_cancelled():
+        edges = APP_STATE["app"]["graph_data"]["edges"]
+        if edges:
+            return ("fail", "releasing edge-create off-target should not create an edge")
+        if core.transient_effects.get("preview-edge") is not None:
+            return ("fail", "preview edge should clear when edge creation is cancelled")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "edge create cancel",
+        [
+            step_focus_canvas,
+            step_press_source,
+            step_drag_preview,
+            step_release_off_target,
+            step_assert_cancelled,
+        ],
+    )
+    run_suite()
