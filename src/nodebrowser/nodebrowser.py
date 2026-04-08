@@ -477,6 +477,14 @@ def _run_drag_lifecycle_tokenizer():
     dy = raw["y"] - interaction["mouse_down_y"]
     drag_distance = math.hypot(dx, dy)
     drag_threshold_crossed = drag_distance >= render["drag_threshold"]
+    drag_episode_continues = (
+        raw["button_1_down"]
+        and derived_prev["dragging"]
+        and not (raw["event_name"] == "button-1-release")
+    )
+    dragging = (
+        raw["event_name"] == "button-1-motion" and drag_threshold_crossed
+    ) or drag_episode_continues
 
     derived["press_started"] = raw["event_name"] == "button-1-press"
     derived["press_released"] = raw["event_name"] == "button-1-release"
@@ -487,12 +495,11 @@ def _run_drag_lifecycle_tokenizer():
         and drag_threshold_crossed
         and not derived_prev["drag_threshold_crossed"]
     )
-    derived["dragging"] = raw["event_name"] == "button-1-motion" and drag_threshold_crossed
+    derived["dragging"] = dragging
     derived["drag_ended"] = raw["event_name"] == "button-1-release" and derived_prev["drag_threshold_crossed"]
 
     if (
-        raw["event_name"] in ("button-1-motion", "button-1-release")
-        and drag_threshold_crossed
+        dragging or derived["drag_ended"]
     ):
         derived["drag_rect"] = {
             "x1": interaction["mouse_down_x"],
@@ -1236,34 +1243,22 @@ def _run_layout_key_organism(organism):
 
 
 def _run_pan_organism(organism):
-    if raw["event_name"] == "button-1-release":
-        notify_done(organism)
-        return
-
-    if raw["event_name"] != "button-1-motion":
-        return
-
-    if interaction["ignore_release"] or interaction["press_consumed"]:
-        notify_done(organism)
-        return
-
-    if not raw["shift_down"]:
-        notify_done(organism)
-        return
-
-    if interaction["press_node_id"] is not None:
-        notify_done(organism)
-        return
-
-    if not derived["drag_threshold_crossed"]:
-        if organism["STATE"] != "ACTIVE":
-            organism["STATE"] = "IDLE"
-        return
-
-    if organism["STATE"] != "ACTIVE":
+    if (
+        raw["shift_down"]
+        and derived["press_started"]
+        and derived["press_node_id"] is None
+    ):
         if not get_permission("START", ["pointer", "viewport"]):
             return
         organism["STATE"] = "ACTIVE"
+        return
+
+    if organism["STATE"] != "ACTIVE":
+        return
+
+    if derived["press_released"]:
+        notify_done(organism)
+        return
 
     dx = derived["pointer_dx"]
     dy = derived["pointer_dy"]
