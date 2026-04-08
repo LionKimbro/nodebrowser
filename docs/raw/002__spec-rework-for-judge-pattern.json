@@ -1,0 +1,872 @@
+{
+  "document": {
+    "document-id": "nodebrowser.canvas-interaction.spec.v2",
+    "title": "Node Browser Canvas Interaction Core (Supersedes v1)",
+    "tags": [
+      "nodebrowser",
+      "spec",
+      "tkinter",
+      "canvas"
+    ],
+    "date": "2026-04-07",
+    "status": "active-draft",
+    "purpose": "Specify a small reusable Python module that attaches a node-browser style interaction model to a tkinter.Canvas. The module is focused only on canvas interaction, rendering, and a simple projected data model. It is intended to be repointable to different canvas widgets and different data dictionaries.",
+    "supersedes": "nodebrowser.canvas-interaction.spec.v1",
+    "supersedes-document": "001__initial-spec.json"
+  },
+  "overview": {
+    "summary": "Implement a procedural, globally-managed canvas interaction system for circular nodes on a tkinter.Canvas. Nodes can be created, dragged, singly selected, marquee-selected in groups, deleted, and connected by curved edges. The system owns only canvas interaction and rendering. External systems may supply the canvas, the data model, and any detail-view behavior.",
+    "non-goals": [
+      "No object-oriented framework.",
+      "No persistence format in this spec.",
+      "No external detail panel behavior in this spec.",
+      "No labels or rich metadata beyond node id/name and position.",
+      "No zooming, panning, grouping, undo/redo, or multi-canvas synchronization in v1."
+    ]
+  },
+  "design-intent": {
+    "architectural-shape": [
+      "One Python module contains the interaction logic, rendering logic, global state, and active canvas/data references.",
+      "The module is externally repointable to a different canvas and/or different data dictionary at runtime.",
+      "The module exposes a small procedural surface: attach/use canvas, attach/use data, redraw, and event handlers."
+    ],
+    "philosophy": [
+      "Keep the internal data model simple and trusted.",
+      "Keep interaction logic direct and easy to inspect.",
+      "Structure should be visible from a distance.",
+      "Avoid classes unless absolutely necessary."
+    ]
+  },
+  "module-role": {
+    "name": "Suggested working name: node_canvas_core.py",
+    "responsibility": [
+      "Maintain active references to the current canvas and current graph data.",
+      "Handle keyboard and mouse interaction on the active canvas.",
+      "Render nodes, selection indicators, marquee rectangle, and connection curves.",
+      "Support hit-testing and drag behavior.",
+      "Project simple graph data onto the canvas."
+    ],
+    "external-responsibility": [
+      "Supplying the canvas widget.",
+      "Supplying the graph data structure.",
+      "Responding to selection changes if a host program wishes to do so.",
+      "Saving/loading data."
+    ]
+  },
+  "data-model": {
+    "summary": "The data model is deliberately small and canvas-oriented.",
+    "graph": {
+      "nodes": {
+        "<node-id>": {
+          "id": "<string>",
+          "x": "<number>",
+          "y": "<number>"
+        }
+      },
+      "edges": [
+        {
+          "from": "<node-id>",
+          "to": "<node-id>"
+        }
+      ]
+    },
+    "notes": [
+      "Node id is both identity and display name for now.",
+      "x and y are the logical center of the node.",
+      "No other node data is required by this module.",
+      "Edges are directional.",
+      "Connection rendering is determined entirely from node positions."
+    ]
+  },
+  "global-state": {
+    "summary": "The module keeps a small set of globals representing active canvas, active data, render settings, and interaction state.",
+    "required-globals": {
+      "g": {
+        "mode": "IDLE or CREATE_NODE",
+        "selected_node_id": "string or null",
+        "active_canvas_name": "optional external/debugging label"
+      },
+      "canvas_widget": "current tkinter.Canvas or null",
+      "graph_data": "current graph dictionary or null",
+      "widgets": {},
+      "interaction": {
+        "mouse_down_x": 0,
+        "mouse_down_y": 0,
+        "last_mouse_x": 0,
+        "last_mouse_y": 0,
+        "drag_node_id": null,
+        "group_drag_origin": null,
+        "marquee_start": null,
+        "marquee_end": null
+      },
+      "selection": {
+        "group_selected_ids": []
+      },
+      "render": {
+        "node_radius": 25,
+        "selected_inner_radius": 20,
+        "node_outline_width": 5,
+        "selected_inner_width": 1,
+        "marquee_outline_width": 1,
+        "hit_slop": 3,
+        "background_color": "black or beige; host-adjustable",
+        "node_outline_color": "white",
+        "node_fill_color": "",
+        "selected_fill_color": "dark green",
+        "selected_inner_color": "green",
+        "edge_color": "white",
+        "marquee_outline_color": "white",
+        "marquee_dash": [
+          4,
+          4
+        ],
+        "group_halo_color": "blue",
+        "group_halo_width": 1,
+        "group_halo_radius_offset": 3
+      },
+      "canvas_items": {
+        "node_items_by_id": {},
+        "edge_items": [],
+        "marquee_item": null
+      },
+      "viewport": {
+        "offset_x": 0,
+        "offset_y": 0
+      }
+    },
+    "rules": [
+      "Globals are mutated, not rebound wholesale, except when intentionally repointing active canvas or graph data.",
+      "Structured state should live in dedicated named globals rather than being stuffed into one catch-all bag.",
+      "The module should remain inspectable during runtime."
+    ]
+  },
+  "selection-model": {
+    "single-selection": {
+      "field": "g['selected_node_id']",
+      "meaning": "The node selected for detail view. May be null."
+    },
+    "group-selection": {
+      "field": "selection['group_selected_ids']",
+      "meaning": "Set of nodes used for group operations such as drag and delete."
+    },
+    "notes": [
+      "Selection state is mutated only through organism-emitted effects.",
+      "No behavioral rules are defined here."
+    ]
+  },
+  "event-surface": {
+    "purpose": "Bind toolkit events into RAW input for the interaction system.",
+    "bindings": [
+      "<Button-1>",
+      "<B1-Motion>",
+      "<ButtonRelease-1>",
+      "<KeyPress>",
+      "<KeyRelease>"
+    ],
+    "notes": [
+      "Events are translated into RAW state (pointer position, button states, key states).",
+      "No interaction behavior is implemented at this layer."
+    ]
+  },
+  "interaction-context": {
+    "fields": {
+      "g['mode']": "Optional high-level mode flag (e.g. CREATE_NODE)."
+    },
+    "notes": [
+      "Modes are minimal and advisory.",
+      "Organisms may consult mode but do not derive authority from it.",
+      "CREATE_NODE is used only by node-create-organism."
+    ]
+  },
+  "hit-testing": {
+    "node-hit": {
+      "rule": "A point hits a node if its distance from the node center is less than or equal to node_radius plus hit_slop."
+    },
+    "priority": [
+      "Node hit-testing should be based on graph data geometry, not canvas item ids alone.",
+      "If multiple nodes overlap, the last-drawn/topmost node should win unless a different policy is later introduced."
+    ]
+  },
+  "interaction-episodes": {
+    "summary": "These describe recognizable interaction patterns over time. They do not grant authority or enforce exclusivity. They are observational and descriptive, not adjudicative.",
+    "episodes": [
+      {
+        "name": "node-click",
+        "pattern": [
+          "mouse-down on node",
+          "no drag beyond threshold",
+          "mouse-up"
+        ],
+        "intended-effect": "select node"
+      },
+      {
+        "name": "node-drag",
+        "pattern": [
+          "mouse-down on node",
+          "drag threshold crossed",
+          "mouse move"
+        ],
+        "intended-effect": "move node"
+      },
+      {
+        "name": "group-drag",
+        "pattern": [
+          "mouse-down on node in group selection",
+          "drag threshold crossed"
+        ],
+        "intended-effect": "move group"
+      },
+      {
+        "name": "marquee-select",
+        "pattern": [
+          "mouse-down on empty space",
+          "drag"
+        ],
+        "intended-effect": "select region"
+      },
+      {
+        "name": "edge-create-drag",
+        "pattern": [
+          "SHIFT held",
+          "mouse-down on node",
+          "drag",
+          "release over node"
+        ],
+        "intended-effect": "create edge"
+      }
+    ]
+  },
+  "organisms": {
+    "summary": "Organisms are stateful interaction recognizers that observe input patterns, petition the judge for legitimacy, and emit effects. They do not enforce coordination rules themselves.",
+    "inventory": {
+      "pointer-focus-organism": {
+        "name": "pointer-focus-organism",
+        "purpose": "Acquire canvas focus on first click without triggering other actions.",
+        "recognizes": [
+          "mouse-down on canvas",
+          "canvas does not have focus"
+        ],
+        "petitions": [
+          "START"
+        ],
+        "held": {},
+        "effects": [
+          "set canvas focus",
+          "consume click (prevent further interaction for this click)"
+        ],
+        "notes": [
+          "This organism ensures that the first click only establishes focus.",
+          "Prevents accidental selection or creation when canvas is not yet active."
+        ]
+      },
+      "node-click-select-organism": {
+        "name": "node-click-select-organism",
+        "purpose": "Select a single node for detail view.",
+        "recognizes": [
+          "mouse-down on node",
+          "no drag beyond threshold",
+          "mouse-up"
+        ],
+        "petitions": [
+          "START",
+          "HOLD-RESOURCE:selection:single"
+        ],
+        "held": {
+          "selection": "single"
+        },
+        "effects": [
+          "set selected_node_id"
+        ]
+      },
+      "empty-click-clear-selection-organism": {
+        "name": "empty-click-clear-selection-organism",
+        "purpose": "Clear single-node selection when clicking empty space.",
+        "recognizes": [
+          "mouse-down on empty space",
+          "no drag beyond threshold",
+          "canvas already has focus"
+        ],
+        "petitions": [
+          "START"
+        ],
+        "held": {},
+        "effects": [
+          "clear selected_node_id"
+        ]
+      },
+      "node-drag-organism": {
+        "name": "node-drag-organism",
+        "purpose": "Drag a single node.",
+        "recognizes": [
+          "mouse-down on node",
+          "drag threshold crossed"
+        ],
+        "petitions": [
+          "START",
+          "HOLD-RESOURCE:pointer",
+          "HOLD-RESOURCE:node:<id>"
+        ],
+        "held": {
+          "node": "<node-id>"
+        },
+        "effects": [
+          "emit move-node effect during drag"
+        ],
+        "notes": [
+          "Competes with group-drag-organism; judge determines which is allowed."
+        ]
+      },
+      "group-drag-organism": {
+        "name": "group-drag-organism",
+        "purpose": "Drag all nodes in the current group selection.",
+        "recognizes": [
+          "mouse-down on node in group selection",
+          "drag threshold crossed"
+        ],
+        "petitions": [
+          "START",
+          "HOLD-RESOURCE:pointer",
+          "HOLD-RESOURCE:group-selection"
+        ],
+        "held": {
+          "group": [
+            "<node-id>",
+            "<node-id>"
+          ]
+        },
+        "effects": [
+          "emit move-group effect during drag"
+        ],
+        "notes": [
+          "Takes precedence over node-drag when applicable."
+        ]
+      },
+      "marquee-select-organism": {
+        "name": "marquee-select-organism",
+        "purpose": "Select nodes within a rectangular region.",
+        "recognizes": [
+          "mouse-down on empty space",
+          "drag threshold crossed"
+        ],
+        "petitions": [
+          "START",
+          "HOLD-RESOURCE:pointer"
+        ],
+        "held": {
+          "marquee": true
+        },
+        "effects": [
+          "emit marquee preview during drag",
+          "on release: set group selection"
+        ]
+      },
+      "edge-create-organism": {
+        "name": "edge-create-organism",
+        "purpose": "Create an edge by SHIFT-dragging from one node to another.",
+        "recognizes": [
+          "SHIFT held",
+          "mouse-down on node",
+          "drag"
+        ],
+        "petitions": [
+          "START",
+          "HOLD-RESOURCE:pointer",
+          "HOLD-RESOURCE:edge-create"
+        ],
+        "held": {
+          "source": "<node-id>"
+        },
+        "effects": [
+          "emit preview edge during drag",
+          "on release over node: create edge"
+        ],
+        "notes": [
+          "Takes priority over drag organisms when SHIFT is held."
+        ]
+      },
+      "node-create-organism": {
+        "name": "node-create-organism",
+        "purpose": "Create a node in CREATE_NODE mode.",
+        "recognizes": [
+          "mode == CREATE_NODE",
+          "click on canvas"
+        ],
+        "petitions": [
+          "START"
+        ],
+        "held": {},
+        "effects": [
+          "create-node",
+          "set-single-selection",
+          "set-mode IDLE"
+        ]
+      },
+      "delete-organism": {
+        "name": "delete-organism",
+        "purpose": "Delete selected nodes via keyboard.",
+        "recognizes": [
+          "Delete key pressed"
+        ],
+        "petitions": [
+          "START"
+        ],
+        "held": {},
+        "effects": [
+          "if group selection exists: delete group",
+          "else if single selection exists: delete node"
+        ]
+      },
+      "mode-key-organism": {
+        "name": "mode-key-organism",
+        "purpose": "Handle interaction mode changes in response to keyboard input.",
+        "recognizes": [
+          {
+            "pattern": [
+              "KeyPress",
+              "canvas has focus"
+            ],
+            "result": "request mode change"
+          }
+        ],
+        "mode-map": {
+          "n": "CREATE_NODE",
+          "Escape": "IDLE"
+        },
+        "petitions": [
+          "START",
+          "HOLD-RESOURCE:interaction-mode"
+        ],
+        "held": {
+          "mode": "<requested-mode>"
+        },
+        "effects": [
+          "set-mode <requested-mode>"
+        ],
+        "notes": [
+          "This organism centralizes all keyboard-driven mode transitions.",
+          "Each recognition branch maps an input pattern to a requested mode.",
+          "The organism does not interpret what the mode means; it only sets it.",
+          "Additional modes can be added by extending the recognizes list.",
+          "Mode changes remain subject to judge approval via interaction-mode resource."
+        ]
+      },
+      "pan-organism": {
+        "name": "pan-organism",
+        "purpose": "Pan the viewport across an infinite canvas using SHIFT-drag on empty space.",
+        "recognizes": [
+          "SHIFT held",
+          "mouse-down on empty space",
+          "drag threshold crossed"
+        ],
+        "petitions": [
+          "START",
+          "HOLD-RESOURCE:pointer",
+          "HOLD-RESOURCE:viewport"
+        ],
+        "held": {
+          "viewport": true
+        },
+        "effects": [
+          "emit pan-viewport effect during drag"
+        ],
+        "notes": [
+          "This organism moves the viewport, not the nodes.",
+          "It operates only when starting from empty space.",
+          "It competes with marquee-select-organism; judge resolves via SHIFT priority."
+        ]
+      }
+    }
+  },
+  "judge": {
+    "summary": "The judge is the authoritative arbiter of interaction. Organisms may detect and propose actions, but only the judge grants permission and writes coordination state.",
+    "coordination-schema": {
+      "pointer-owner": "<organism-name or null>",
+      "resource-holds": {
+        "<resource-id>": "<organism-name>"
+      },
+      "leases": {
+        "<organism-name>": {
+          "resources": [
+            "<resource-id>"
+          ],
+          "kind": "exclusive",
+          "valid": true
+        }
+      }
+    },
+    "resources": {
+      "pointer": "Exclusive ownership of pointer-driven interaction (dragging, marquee, edge creation).",
+      "selection:single": "Authority to set or clear the single selected node.",
+      "group-selection": "Authority over the current group selection set.",
+      "node:<id>": "Exclusive control over a specific node during drag.",
+      "edge-create": "Exclusive control over edge creation gesture.",
+      "interaction-mode": [
+        "The judge may be implemented as a simple procedural module with explicit checks.",
+        "The judge does not need to be generalized beyond the needs of this system.",
+        "Coordination state should remain small, inspectable, and easy to reason about.",
+        "Organisms remain simple because they do not encode priority or exclusivity rules."
+      ],
+      "viewport": "Exclusive control over viewport movement (panning)."
+    },
+    "principles": [
+      "Only one organism may own the pointer at a time.",
+      "Resources are exclusive unless explicitly defined otherwise.",
+      "Organisms must petition before acting.",
+      "The judge is the only writer of coordination state.",
+      "Priority rules are applied during permission decisions, not in organism logic."
+    ],
+    "priority-rules": [
+      {
+        "rule": "SHIFT edge creation overrides drag behaviors",
+        "effect": "edge-create-organism is preferred over node-drag-organism and group-drag-organism when SHIFT is held"
+      },
+      {
+        "rule": "Group drag overrides single node drag",
+        "effect": "group-drag-organism wins over node-drag-organism when node is part of group selection"
+      },
+      {
+        "rule": "Pointer is exclusive",
+        "effect": "If pointer is already owned, other organisms cannot START pointer-based interactions"
+      },
+      {
+        "rule": "Focus click consumes interaction",
+        "effect": "pointer-focus-organism prevents all other organisms from starting on that click"
+      },
+      {
+        "rule": "SHIFT + empty drag performs pan instead of marquee",
+        "effect": "pan-organism is preferred over marquee-select-organism when SHIFT is held on empty space"
+      }
+    ],
+    "judge-interface": {
+      "get_permission": {
+        "description": "Organism requests permission to start or hold resources.",
+        "inputs": [
+          "request-type (START or HOLD-RESOURCE)",
+          "requested-resources",
+          "organism-name"
+        ],
+        "returns": [
+          "granted (true/false)"
+        ]
+      },
+      "maintain_judge": {
+        "description": "Reconcile coordination state with current organism activity.",
+        "responsibilities": [
+          "Release pointer if no organism is actively holding it",
+          "Clear invalid resource holds",
+          "Remove stale leases",
+          "Ensure coordination reflects real active organisms"
+        ]
+      }
+    },
+    "permission-rules": {
+      "START": [
+        {
+          "condition": "pointer is unowned",
+          "result": "allow organism to START if it requests pointer"
+        },
+        {
+          "condition": "pointer is owned",
+          "result": "deny START unless priority rules override"
+        },
+        {
+          "condition": "priority override applies",
+          "result": "current pointer owner is displaced and new organism takes ownership"
+        }
+      ],
+      "HOLD-RESOURCE": [
+        {
+          "condition": "resource is unheld",
+          "result": "grant hold"
+        },
+        {
+          "condition": "resource is held by same organism",
+          "result": "allow (idempotent)"
+        },
+        {
+          "condition": "resource is held by another organism",
+          "result": "deny unless priority rule overrides"
+        }
+      ]
+    },
+    "state-transitions": [
+      {
+        "event": "organism START granted",
+        "effects": [
+          "set pointer-owner if pointer requested",
+          "create lease entry for organism"
+        ]
+      },
+      {
+        "event": "organism HOLD-RESOURCE granted",
+        "effects": [
+          "add resource to resource-holds",
+          "associate resource with organism lease"
+        ]
+      },
+      {
+        "event": "organism releases or becomes inactive",
+        "effects": [
+          "remove its resources from resource-holds",
+          "clear pointer-owner if applicable",
+          "remove lease entry"
+        ]
+      }
+    ],
+    "notes": [
+      "The judge may be implemented as a simple procedural module with explicit checks.",
+      "The judge does not need to be generalized beyond the needs of this system.",
+      "Coordination state should remain small, inspectable, and easy to reason about.",
+      "Organisms remain simple because they do not encode priority or exclusivity rules."
+    ]
+  },
+  "effects": {
+    "summary": "Effects are emitted by organisms after judge approval. They are applied to world state or projection.",
+    "types": {
+      "move-node": {
+        "type": "move-node",
+        "payload": {
+          "node_id": "<id>",
+          "dx": "<number>",
+          "dy": "<number>"
+        }
+      },
+      "move-group": {
+        "type": "move-group",
+        "payload": {
+          "node_ids": [
+            "<id>"
+          ],
+          "dx": "<number>",
+          "dy": "<number>"
+        }
+      },
+      "set-single-selection": {
+        "type": "set-single-selection",
+        "payload": {
+          "node_id": "<id or null>"
+        }
+      },
+      "set-group-selection": {
+        "type": "set-group-selection",
+        "payload": {
+          "node_ids": [
+            "<id>"
+          ]
+        }
+      },
+      "create-node": {
+        "type": "create-node",
+        "payload": {
+          "x": "<number>",
+          "y": "<number>",
+          "node_id": "<id>"
+        }
+      },
+      "delete-nodes": {
+        "type": "delete-nodes",
+        "payload": {
+          "node_ids": [
+            "<id>"
+          ]
+        }
+      },
+      "create-edge": {
+        "type": "create-edge",
+        "payload": {
+          "from": "<id>",
+          "to": "<id>"
+        }
+      },
+      "preview-marquee": {
+        "type": "preview-marquee",
+        "payload": {
+          "x1": "<number>",
+          "y1": "<number>",
+          "x2": "<number>",
+          "y2": "<number>"
+        }
+      },
+      "preview-edge": {
+        "type": "preview-edge",
+        "payload": {
+          "from": "<id>",
+          "to_x": "<number>",
+          "to_y": "<number>"
+        }
+      },
+      "pan-viewport": {
+        "type": "pan-viewport",
+        "payload": {
+          "dx": "<number>",
+          "dy": "<number>"
+        }
+      }
+    }
+  },
+  "effect-application": {
+    "summary": "Effect application is the only mechanism that mutates world state or projection.",
+    "principles": [
+      "All state changes occur through applying effects.",
+      "No direct domain-specific functions are called by organisms.",
+      "Effect handlers are simple and local."
+    ],
+    "handlers": {
+      "move-node": "Adjust node position by dx, dy.",
+      "move-group": "Adjust positions of multiple nodes.",
+      "set-single-selection": "Set g['selected_node_id'].",
+      "set-group-selection": "Replace selection['group_selected_ids'].",
+      "create-node": "Insert node into graph_data.",
+      "delete-nodes": "Remove nodes and associated edges.",
+      "create-edge": "Insert edge into graph_data.",
+      "preview-marquee": "Render transient rectangle.",
+      "preview-edge": "Render transient edge preview.",
+      "pan-viewport": "Adjust viewport.offset_x and viewport.offset_y by dx, dy."
+    }
+  },
+  "rendering-model": {
+    "summary": "Canvas contents are treated as a projection of graph data plus transient interaction overlays.",
+    "render-order": [
+      "clear or rebuild edge items",
+      "draw all edges",
+      "draw all nodes",
+      "draw selected-node highlight details",
+      "draw marquee overlay if active"
+    ],
+    "node-appearance": {
+      "normal": [
+        "Outer circle only, white thick outline, no fill or background fill depending on style setting."
+      ],
+      "selected": [
+        "Normal node rendering plus dark green interior fill or selected interior effect.",
+        "Smaller inner circle at radius 20 with thin outline to indicate selected-node status."
+      ],
+      "group-selected": [
+        "Nodes in the group-selected set should display a thin blue halo.",
+        "The halo is an additional outer ring slightly larger than the node radius (e.g. radius + 3 pixels).",
+        "Halo line width should be thin (1–2 pixels).",
+        "Halo color should be a clear blue distinct from selected-node green.",
+        "This styling is independent of selected-node styling."
+      ]
+    },
+    "background": [
+      "Canvas background color should be configurable.",
+      "Default may be black for strong contrast with white nodes and edges."
+    ],
+    "notes": [
+      "All node and edge positions are transformed by viewport offset before rendering.",
+      "World coordinates remain unchanged during panning."
+    ]
+  },
+  "edge-rendering": {
+    "summary": "Connections are directional and visually flow downward from the source node toward the target node.",
+    "geometry": {
+      "start-point": "Bottom of source node: (from.x, from.y + node_radius)",
+      "end-point": "Top of target node: (to.x, to.y - node_radius)"
+    },
+    "curve-style": {
+      "preferred": "Smooth cubic-like curve using Canvas smooth line support with manually chosen control points approximated by intermediate points.",
+      "suggested-shape": [
+        "p0 = source bottom",
+        "p1 = (source.x, source.y + node_radius + vertical_pull)",
+        "p2 = (target.x, target.y - node_radius - vertical_pull)",
+        "p3 = target top"
+      ],
+      "vertical_pull": 60
+    },
+    "notes": [
+      "The exact curve need not be mathematically pure Bézier if Canvas smooth mode yields the intended visual result.",
+      "Arrowheads are optional in v1.",
+      "Edges are rendered behind nodes."
+    ]
+  },
+  "coordinate-policy": {
+    "definition": "Node x,y are always center coordinates in canvas space.",
+    "movement": [
+      "Dragging applies deltas to x,y.",
+      "The graph data is the source of truth; canvas geometry is regenerated from it."
+    ]
+  },
+  "canvas-binding-model": {
+    "summary": "The module is attachable to a canvas and repointable to another.",
+    "required-procedures": [
+      "use_canvas(canvas)",
+      "use_graph_data(graph_data)",
+      "bind_canvas_events()",
+      "unbind_canvas_events()",
+      "redraw_all()"
+    ],
+    "behavior": [
+      "use_canvas(canvas) sets the active canvas reference and binds all required events.",
+      "If another canvas was active previously, that old canvas should be unbound first.",
+      "use_graph_data(graph_data) sets the active graph reference and redraws.",
+      "The module assumes only one active canvas at a time."
+    ]
+  },
+  "host-integration-points": {
+    "optional-callbacks": {
+      "on_single_selection_changed(node_id_or_null)": "Host may update detail view.",
+      "generate_node_id()": "Host may supply new node ids.",
+      "on_graph_mutated()": "Host may be notified after structural or positional changes."
+    },
+    "notes": [
+      "Callbacks are optional. The module should function without them.",
+      "Host integration should not be entangled with core interaction logic."
+    ]
+  },
+  "acceptance-criteria": [
+    "System produces correct effects for node-click-select-organism under valid conditions.",
+    "System produces correct movement effects for node-drag-organism and group-drag-organism.",
+    "System produces correct group selection from marquee-select-organism.",
+    "System produces correct edge creation from edge-create-organism.",
+    "Judge correctly enforces pointer exclusivity and priority rules.",
+    "World state reflects applied effects accurately.",
+    "Projection reflects world state and transient effects."
+  ],
+  "implementation-guidance": {
+    "style": [
+      "Use procedural functions, named globals, and explicit state.",
+      "Prefer geometry-based hit detection from graph_data rather than deriving truth from canvas item ids.",
+      "Redraw from graph state rather than incrementally micro-patching every visual detail unless that becomes necessary later."
+    ],
+    "coding-shape": [
+      "Small named functions are preferred over one giant event handler.",
+      "The code should read like a story of the interaction."
+    ]
+  },
+  "future-extensions": [
+    "Connection-creation interaction mode, e.g. press C then click source and target.",
+    "Distinct visual styling for group-selected nodes.",
+    "Node labels drawn next to or inside nodes.",
+    "Shift-additive marquee selection.",
+    "Z-order controls.",
+    "Snap-to-grid.",
+    "Zoom/pan.",
+    "Undo/redo.",
+    "Externalized style profiles.",
+    "Projection adapters for multiple canvases."
+  ],
+  "node-creation": {
+    "summary": "Node creation is performed by node-create-organism when interaction context permits.",
+    "notes": [
+      "This section defines intent only.",
+      "All behavior is implemented through organisms and judge-mediated effects."
+    ],
+    "node-id-generation": {
+      "default": "If host does not supply a node id generator, module may generate simple ids like node-0001, node-0002, ...",
+      "preferred": "Allow optional external callback or procedure for creating the next node id."
+    },
+    "configurability": [
+      "Auto-select behavior should be implemented in a single clearly named step (e.g. select_single_node(new_id)) so it can be easily removed or toggled later."
+    ]
+  },
+  "focus-and-keyboard": {
+    "summary": "Describes input preconditions relevant to interaction.",
+    "notes": [
+      "Canvas focus is required for keyboard-driven interaction.",
+      "Focus acquisition is handled by pointer-focus-organism.",
+      "Keyboard input is interpreted only when the canvas has focus.",
+      "This section does not define behavior."
+    ]
+  }
+}

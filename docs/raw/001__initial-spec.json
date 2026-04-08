@@ -1,0 +1,532 @@
+{
+  "document": {
+    "document-id": "nodebrowser.canvas-interaction.spec.v1",
+    "title": "Node Browser Canvas Interaction Core (Superseded by v2)",
+    "tags": [
+      "nodebrowser",
+      "spec",
+      "tkinter",
+      "canvas"
+    ],
+    "date": "2026-04-07",
+    "status": "superseded",
+    "purpose": "Specify a small reusable Python module that attaches a node-browser style interaction model to a tkinter.Canvas. The module is focused only on canvas interaction, rendering, and a simple projected data model. It is intended to be repointable to different canvas widgets and different data dictionaries.",
+    "superseded-by": "nodebrowser.canvas-interaction.spec.v2",
+    "superseded-by-document": "002__spec-rework-for-judge-pattern.json"
+  },
+  "overview": {
+    "summary": "Implement a procedural, globally-managed canvas interaction system for circular nodes on a tkinter.Canvas. Nodes can be created, dragged, singly selected, marquee-selected in groups, deleted, and connected by curved edges. The system owns only canvas interaction and rendering. External systems may supply the canvas, the data model, and any detail-view behavior.",
+    "non-goals": [
+      "No object-oriented framework.",
+      "No persistence format in this spec.",
+      "No external detail panel behavior in this spec.",
+      "No labels or rich metadata beyond node id/name and position.",
+      "No zooming, panning, grouping, undo/redo, or multi-canvas synchronization in v1."
+    ]
+  },
+  "design-intent": {
+    "architectural-shape": [
+      "One Python module contains the interaction logic, rendering logic, global state, and active canvas/data references.",
+      "The module is externally repointable to a different canvas and/or different data dictionary at runtime.",
+      "The module exposes a small procedural surface: attach/use canvas, attach/use data, redraw, and event handlers."
+    ],
+    "philosophy": [
+      "Keep the internal data model simple and trusted.",
+      "Keep interaction logic direct and easy to inspect.",
+      "Structure should be visible from a distance.",
+      "Avoid classes unless absolutely necessary."
+    ]
+  },
+  "module-role": {
+    "name": "Suggested working name: node_canvas_core.py",
+    "responsibility": [
+      "Maintain active references to the current canvas and current graph data.",
+      "Handle keyboard and mouse interaction on the active canvas.",
+      "Render nodes, selection indicators, marquee rectangle, and connection curves.",
+      "Support hit-testing and drag behavior.",
+      "Project simple graph data onto the canvas."
+    ],
+    "external-responsibility": [
+      "Supplying the canvas widget.",
+      "Supplying the graph data structure.",
+      "Responding to selection changes if a host program wishes to do so.",
+      "Saving/loading data."
+    ]
+  },
+  "data-model": {
+    "summary": "The data model is deliberately small and canvas-oriented.",
+    "graph": {
+      "nodes": {
+        "<node-id>": {
+          "id": "<string>",
+          "x": "<number>",
+          "y": "<number>"
+        }
+      },
+      "edges": [
+        {
+          "from": "<node-id>",
+          "to": "<node-id>"
+        }
+      ]
+    },
+    "notes": [
+      "Node id is both identity and display name for now.",
+      "x and y are the logical center of the node.",
+      "No other node data is required by this module.",
+      "Edges are directional.",
+      "Connection rendering is determined entirely from node positions."
+    ]
+  },
+  "global-state": {
+    "summary": "The module keeps a small set of globals representing active canvas, active data, render settings, and interaction state.",
+    "required-globals": {
+      "g": {
+        "mode": "IDLE or CREATE_NODE",
+        "selected_node_id": "string or null",
+        "drag_mode": "NONE or NODE_DRAG or MARQUEE_DRAG or GROUP_DRAG",
+        "active_canvas_name": "optional external/debugging label"
+      },
+      "canvas_widget": "current tkinter.Canvas or null",
+      "graph_data": "current graph dictionary or null",
+      "widgets": {},
+      "interaction": {
+        "mouse_down_x": 0,
+        "mouse_down_y": 0,
+        "last_mouse_x": 0,
+        "last_mouse_y": 0,
+        "drag_node_id": null,
+        "group_drag_origin": null,
+        "marquee_start": null,
+        "marquee_end": null
+      },
+      "selection": {
+        "group_selected_ids": []
+      },
+      "render": {
+        "node_radius": 25,
+        "selected_inner_radius": 20,
+        "node_outline_width": 5,
+        "selected_inner_width": 1,
+        "marquee_outline_width": 1,
+        "hit_slop": 3,
+        "background_color": "black or beige; host-adjustable",
+        "node_outline_color": "white",
+        "node_fill_color": "",
+        "selected_fill_color": "dark green",
+        "selected_inner_color": "green",
+        "edge_color": "white",
+        "marquee_outline_color": "white",
+        "marquee_dash": [
+          4,
+          4
+        ],
+        "group_halo_color": "blue",
+        "group_halo_width": 1,
+        "group_halo_radius_offset": 3
+      },
+      "canvas_items": {
+        "node_items_by_id": {},
+        "edge_items": [],
+        "marquee_item": null
+      }
+    },
+    "rules": [
+      "Globals are mutated, not rebound wholesale, except when intentionally repointing active canvas or graph data.",
+      "Structured state should live in dedicated named globals rather than being stuffed into one catch-all bag.",
+      "The module should remain inspectable during runtime."
+    ]
+  },
+  "canvas-binding-model": {
+    "summary": "The module is attachable to a canvas and repointable to another.",
+    "required-procedures": [
+      "use_canvas(canvas)",
+      "use_graph_data(graph_data)",
+      "bind_canvas_events()",
+      "unbind_canvas_events()",
+      "redraw_all()"
+    ],
+    "behavior": [
+      "use_canvas(canvas) sets the active canvas reference and binds all required events.",
+      "If another canvas was active previously, that old canvas should be unbound first.",
+      "use_graph_data(graph_data) sets the active graph reference and redraws.",
+      "The module assumes only one active canvas at a time."
+    ]
+  },
+  "interaction-modes": {
+    "modes": [
+      {
+        "name": "IDLE",
+        "meaning": "Normal interaction state."
+      },
+      {
+        "name": "CREATE_NODE",
+        "meaning": "After pressing N, the next click on empty space creates a node and returns the system to IDLE."
+      }
+    ],
+    "notes": [
+      "The mode should be explicit and easy to inspect.",
+      "CREATE_NODE is one-shot. Pressing N arms one placement only."
+    ],
+    "modifier-based-modes": [
+      {
+        "name": "EDGE_CREATE_DRAG",
+        "activation": "Shift + mouse down on a node",
+        "note": "This is not a persistent mode; it exists only during the drag gesture."
+      }
+    ]
+  },
+  "selection-model": {
+    "single-selection": {
+      "definition": "At most one node may be the selected node for detail-view purposes.",
+      "field": "g['selected_node_id']",
+      "behavior": [
+        "Clicking a node without dragging makes it the selected node.",
+        "Clicking empty space may clear the selected node.",
+        "Dragging a node does not by itself make it the selected node."
+      ]
+    },
+    "group-selection": {
+      "definition": "A separate set of zero or more nodes selected for group operations such as dragging and deleting.",
+      "field": "selection['group_selected_ids']",
+      "behavior": [
+        "Marquee selection fills the group-selected set.",
+        "Group selection does not imply or replace single selected node.",
+        "There may be a selected node that is not part of the group-selected set.",
+        "Delete acts on group selection if group selection is non-empty; otherwise on selected node if any."
+      ]
+    }
+  },
+  "node-creation": {
+    "keyboard": "Pressing N while the active canvas has focus enters CREATE_NODE mode.",
+    "mouse": [
+      "In CREATE_NODE mode, the next click creates a node at that position.",
+      "After creation, the node becomes the selected node.",
+      "Mode returns immediately to IDLE."
+    ],
+    "node-id-generation": {
+      "default": "If host does not supply a node id generator, module may generate simple ids like node-0001, node-0002, ...",
+      "preferred": "Allow optional external callback or procedure for creating the next node id."
+    },
+    "notes": [
+      "Creation does not require a pre-existing selected node.",
+      "The newly created node need not automatically become the selected node unless explicitly chosen later by the host or desired in a later version."
+    ],
+    "configurability": [
+      "Auto-select behavior should be implemented in a single clearly named step (e.g. select_single_node(new_id)) so it can be easily removed or toggled later."
+    ]
+  },
+  "hit-testing": {
+    "node-hit": {
+      "rule": "A point hits a node if its distance from the node center is less than or equal to node_radius plus hit_slop."
+    },
+    "priority": [
+      "Node hit-testing should be based on graph data geometry, not canvas item ids alone.",
+      "If multiple nodes overlap, the last-drawn/topmost node should win unless a different policy is later introduced."
+    ]
+  },
+  "click-and-drag-behavior": {
+    "plain-click-on-node": [
+      "Mouse down on node records candidate click.",
+      "If mouse up occurs without meaningful drag, set selected_node_id to that node."
+    ],
+    "drag-node": [
+      "Mouse down on a node and moving beyond drag threshold begins NODE_DRAG unless group-drag conditions apply.",
+      "During NODE_DRAG, the node center follows pointer movement by delta.",
+      "On release, drag ends and redraw occurs."
+    ],
+    "group-drag": [
+      "If mouse down occurs on a node that is inside the current group selection, then dragging may move the whole group together.",
+      "All group-selected nodes move by the same delta."
+    ],
+    "marquee-drag": [
+      "Mouse down on empty canvas in IDLE begins marquee candidate.",
+      "Dragging on empty canvas draws a rectangular marquee.",
+      "On mouse release, all nodes whose centers fall within the marquee rectangle become the new group-selected set."
+    ],
+    "drag-threshold": {
+      "purpose": "Prevent a tiny accidental movement from being interpreted as a drag.",
+      "suggested_pixels": 4
+    }
+  },
+  "edge-creation-interaction": {
+    "gesture": [
+      "Hold SHIFT.",
+      "Mouse down on a source node.",
+      "Drag toward another node.",
+      "Release over a target node to create an edge."
+    ],
+    "behavior": [
+      "On SHIFT + mouse down on node A: begin edge-drag with source A.",
+      "During drag: optionally render a preview line from A to current mouse position.",
+      "On release over node B (B != A): create edge {from: A, to: B}.",
+      "On release not over a node: cancel edge creation.",
+      "On release over same node: no-op (or optionally ignore)."
+    ],
+    "state": {
+      "interaction['edge_drag_source_id']": "node id or null",
+      "interaction['edge_drag_current_pos']": "(x, y) or null"
+    },
+    "rendering": [
+      "During edge drag, draw a temporary preview curve or line from source node to pointer.",
+      "Preview is not part of graph_data and should be cleared on release."
+    ],
+    "priority": [
+      "SHIFT + click on node takes precedence over normal drag or selection.",
+      "While in EDGE_CREATE_DRAG, no node movement or selection change occurs."
+    ]
+  },
+  "empty-space-behavior": {
+    "focus-and-keyboard": {
+      "requirements": [
+        "The active canvas must be able to receive keyboard focus.",
+        "Clicking the canvas when it does not have focus should focus it and consume the click (no selection or other action).",
+        "Subsequent clicks when the canvas already has focus may perform normal interaction.",
+        "N and Delete act only when the canvas has focus."
+      ]
+    },
+    "empty-space-behavior": {
+      "idle-click": [
+        "If canvas does NOT have focus: clicking focuses the canvas and does nothing else.",
+        "If canvas already has focus: a completed click (mouse down and up without drag) clears single selection.",
+        "Click-drag on empty canvas creates marquee selection."
+      ]
+    },
+    "click-and-drag-behavior": {
+      "click-definition": "A click is defined as mouse down followed by mouse up without exceeding drag threshold.",
+      "note": "Selection clearing only occurs on a completed click, not on drag initiation."
+    },
+    "idle-click": [
+      "Clicking empty canvas in IDLE may clear single selection.",
+      "Click-drag on empty canvas creates marquee selection instead of panning."
+    ],
+    "create-node-click": [
+      "Clicking empty canvas in CREATE_NODE places a node."
+    ]
+  },
+  "delete-behavior": {
+    "keyboard": "Delete key removes selected items according to priority.",
+    "priority": [
+      "If group_selected_ids is non-empty, delete all nodes in that set.",
+      "Else if selected_node_id is not null, delete that single node.",
+      "Else do nothing."
+    ],
+    "edge-cleanup": [
+      "Deleting a node also deletes any edges whose from or to refers to that node."
+    ],
+    "selection-cleanup": [
+      "Deleted nodes are removed from selected_node_id and group_selected_ids as needed."
+    ]
+  },
+  "edge-rendering": {
+    "summary": "Connections are directional and visually flow downward from the source node toward the target node.",
+    "geometry": {
+      "start-point": "Bottom of source node: (from.x, from.y + node_radius)",
+      "end-point": "Top of target node: (to.x, to.y - node_radius)"
+    },
+    "curve-style": {
+      "preferred": "Smooth cubic-like curve using Canvas smooth line support with manually chosen control points approximated by intermediate points.",
+      "suggested-shape": [
+        "p0 = source bottom",
+        "p1 = (source.x, source.y + node_radius + vertical_pull)",
+        "p2 = (target.x, target.y - node_radius - vertical_pull)",
+        "p3 = target top"
+      ],
+      "vertical_pull": 60
+    },
+    "notes": [
+      "The exact curve need not be mathematically pure Bézier if Canvas smooth mode yields the intended visual result.",
+      "Arrowheads are optional in v1.",
+      "Edges are rendered behind nodes."
+    ]
+  },
+  "rendering-model": {
+    "summary": "Canvas contents are treated as a projection of graph data plus transient interaction overlays.",
+    "render-order": [
+      "clear or rebuild edge items",
+      "draw all edges",
+      "draw all nodes",
+      "draw selected-node highlight details",
+      "draw marquee overlay if active"
+    ],
+    "node-appearance": {
+      "normal": [
+        "Outer circle only, white thick outline, no fill or background fill depending on style setting."
+      ],
+      "selected": [
+        "Normal node rendering plus dark green interior fill or selected interior effect.",
+        "Smaller inner circle at radius 20 with thin outline to indicate selected-node status."
+      ],
+      "group-selected": [
+        "Nodes in the group-selected set should display a thin blue halo.",
+        "The halo is an additional outer ring slightly larger than the node radius (e.g. radius + 3 pixels).",
+        "Halo line width should be thin (1–2 pixels).",
+        "Halo color should be a clear blue distinct from selected-node green.",
+        "This styling is independent of selected-node styling."
+      ]
+    },
+    "background": [
+      "Canvas background color should be configurable.",
+      "Default may be black for strong contrast with white nodes and edges."
+    ]
+  },
+  "coordinate-policy": {
+    "definition": "Node x,y are always center coordinates in canvas space.",
+    "movement": [
+      "Dragging applies deltas to x,y.",
+      "The graph data is the source of truth; canvas geometry is regenerated from it."
+    ]
+  },
+  "required-procedures-detail": {
+    "use_canvas(canvas)": "Set active canvas, bind events, ensure focus behavior is possible, redraw if graph is already present.",
+    "use_graph_data(graph_data)": "Set active graph reference and redraw.",
+    "redraw_all()": "Rebuild visible canvas representation from graph_data and current interaction state.",
+    "create_node_at(x, y)": "Create node entry in graph_data and redraw.",
+    "delete_selected()": "Delete group or single selection according to policy and redraw.",
+    "find_node_at(x, y)": "Return node id or null using geometry-based hit testing.",
+    "select_single_node(node_id)": "Set selected_node_id.",
+    "clear_single_selection()": "Set selected_node_id to null.",
+    "set_group_selection(node_ids)": "Replace group-selected set.",
+    "clear_group_selection()": "Empty group-selected set.",
+    "move_node_by(node_id, dx, dy)": "Mutate node position.",
+    "move_group_by(node_ids, dx, dy)": "Mutate multiple node positions.",
+    "make_edge(from_id, to_id)": "Append edge entry and redraw.",
+    "delete_edges_touching(node_id)": "Remove edges connected to node."
+  },
+  "event-surface": {
+    "required-bindings": [
+      "<Button-1>",
+      "<B1-Motion>",
+      "<ButtonRelease-1>",
+      "<Shift-Button-1>",
+      "<KeyPress-n>",
+      "<KeyPress-N>",
+      "<Delete>"
+    ],
+    "optional-bindings": [
+      "<Escape>"
+    ],
+    "behavior": {
+      "Escape": "May cancel CREATE_NODE mode and clear marquee-in-progress."
+    }
+  },
+  "interaction-state-machine": {
+    "summary": "A small explicit state machine is preferred over implicit branching chaos.",
+    "states": [
+      {
+        "name": "IDLE",
+        "transitions": [
+          "Shift + mouse-down on node -> EDGE_CREATE_DRAG",
+          "mouse-down on node -> CLICK_OR_DRAG_NODE",
+          "mouse-down on empty space -> MARQUEE candidate",
+          "N key -> CREATE_NODE"
+        ]
+      },
+      {
+        "name": "CREATE_NODE",
+        "transitions": [
+          "click on canvas -> create node, then IDLE",
+          "Escape -> IDLE"
+        ]
+      },
+      {
+        "name": "CLICK_OR_DRAG_NODE",
+        "transitions": [
+          "small movement + release -> select node, then IDLE",
+          "drag threshold crossed -> NODE_DRAG or GROUP_DRAG"
+        ]
+      },
+      {
+        "name": "NODE_DRAG",
+        "transitions": [
+          "mouse move -> move dragged node",
+          "release -> IDLE"
+        ]
+      },
+      {
+        "name": "GROUP_DRAG",
+        "transitions": [
+          "mouse move -> move whole group",
+          "release -> IDLE"
+        ]
+      },
+      {
+        "name": "MARQUEE_DRAG",
+        "transitions": [
+          "mouse move -> update marquee rectangle",
+          "release -> commit group selection, then IDLE"
+        ]
+      },
+      {
+        "name": "EDGE_CREATE_DRAG",
+        "transitions": [
+          "mouse move -> update preview edge",
+          "release over node -> create edge, then IDLE",
+          "release elsewhere -> cancel, then IDLE"
+        ]
+      }
+    ],
+    "note": "Implementation may encode these as strings in globals rather than formal objects."
+  },
+  "focus-and-keyboard": {
+    "requirements": [
+      "The active canvas must be able to receive keyboard focus.",
+      "Clicking the canvas should typically focus it.",
+      "N and Delete should act only when the canvas is the intended target."
+    ]
+  },
+  "host-integration-points": {
+    "optional-callbacks": {
+      "on_single_selection_changed(node_id_or_null)": "Host may update detail view.",
+      "generate_node_id()": "Host may supply new node ids.",
+      "on_graph_mutated()": "Host may be notified after structural or positional changes."
+    },
+    "notes": [
+      "Callbacks are optional. The module should function without them.",
+      "Host integration should not be entangled with core interaction logic."
+    ]
+  },
+  "future-extensions": [
+    "Connection-creation interaction mode, e.g. press C then click source and target.",
+    "Distinct visual styling for group-selected nodes.",
+    "Node labels drawn next to or inside nodes.",
+    "Shift-additive marquee selection.",
+    "Z-order controls.",
+    "Snap-to-grid.",
+    "Zoom/pan.",
+    "Undo/redo.",
+    "Externalized style profiles.",
+    "Projection adapters for multiple canvases."
+  ],
+  "acceptance-criteria": [
+    "A canvas can be attached to the module and made active.",
+    "A graph data dictionary can be attached to the module and rendered.",
+    "Pressing N then clicking empty canvas creates exactly one node and exits create mode.",
+    "Clicking a node selects it without dragging it.",
+    "Dragging a node moves it without necessarily changing selected node.",
+    "Dragging empty space creates a marquee and produces a group selection on release.",
+    "Dragging a node inside the current group selection moves the full group.",
+    "Delete removes group selection first, otherwise selected node.",
+    "Deleting a node also removes attached edges.",
+    "Edges render as downward-flowing curves from source bottom to target top.",
+    "The module can be repointed to a different canvas and different graph data."
+  ],
+  "implementation-guidance": {
+    "style": [
+      "Use procedural functions, named globals, and explicit state.",
+      "Prefer geometry-based hit detection from graph_data rather than deriving truth from canvas item ids.",
+      "Redraw from graph state rather than incrementally micro-patching every visual detail unless that becomes necessary later."
+    ],
+    "coding-shape": [
+      "Small named functions are preferred over one giant event handler.",
+      "The code should read like a story of the interaction."
+    ]
+  },
+  "interaction-priority": [
+    "Canvas focus acquisition consumes the first click.",
+    "SHIFT-modified gestures take precedence over normal node drag or selection.",
+    "Drag threshold distinguishes click vs drag.",
+    "Group drag takes precedence when dragging a node inside group selection.",
+    "Marquee applies only when starting from empty space."
+  ]
+}
