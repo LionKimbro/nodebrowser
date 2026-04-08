@@ -285,9 +285,6 @@ def _init_organisms():
         _make_organism("empty-click-clear-selection-organism", _run_empty_click_clear_selection_organism),
         _make_organism("delete-organism", _run_delete_organism),
     ]
-    for organism in organisms:
-        if organism["NAME"] == "marquee-select-organism":
-            organism["STATE"] = "INACTIVE"
 
 
 def use_canvas(canvas):
@@ -552,7 +549,7 @@ def maintain_judge():
     active_names = {
         organism["NAME"]
         for organism in organisms
-        if organism["STATE"] not in ("IDLE", "INACTIVE")
+        if organism["STATE"] != "IDLE"
     }
     stale_names = [name for name in coordination["leases"] if name not in active_names]
 
@@ -624,9 +621,22 @@ def emit_effect(effect_type, payload=None):
 def notify_done(organism):
     """Tell the judge this organism is no longer engaged."""
 
-    organism["STATE"] = "INACTIVE"
+    organism["STATE"] = "IDLE"
     organism["HELD"] = {}
     _release_lease(organism["NAME"])
+
+
+def _clear_edge_create_interaction():
+    interaction["edge_drag_source_id"] = None
+    interaction["edge_drag_current_pos"] = None
+
+
+def _clear_group_drag_interaction():
+    interaction["group_drag_origin"] = None
+
+
+def _clear_node_drag_interaction():
+    interaction["drag_node_id"] = None
 
 
 def apply_effects():
@@ -1177,78 +1187,54 @@ def _run_node_create_organism(organism):
 
 def _run_edge_create_organism(organism):
     if g["mode"] != "IDLE":
-        if organism["STATE"] != "IDLE":
-            _release_lease(organism["NAME"])
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["edge_drag_source_id"] = None
-        interaction["edge_drag_current_pos"] = None
+        notify_done(organism)
+        _clear_edge_create_interaction()
         return
 
     if raw["event_name"] == "button-1-release":
-        if organism["STATE"] == "DRAGGING":
+        if organism["STATE"] == "ACTIVE":
             target_id = raw["pointer_node_id"]
             source_id = interaction["edge_drag_source_id"]
             if target_id is not None and source_id is not None and target_id != source_id:
                 effect_type = "delete-edge" if has_edge(source_id, target_id) else "create-edge"
                 emit_effect(effect_type, {"from": source_id, "to": target_id})
-            _release_lease(organism["NAME"])
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["edge_drag_source_id"] = None
-        interaction["edge_drag_current_pos"] = None
+        notify_done(organism)
+        _clear_edge_create_interaction()
         return
 
     is_pointer_start_event = raw["event_name"] == "button-1-press"
     is_pointer_drag_event = raw["event_name"] == "button-1-motion"
 
-    if organism["STATE"] != "DRAGGING" and not (is_pointer_start_event or is_pointer_drag_event):
-        if organism["STATE"] == "DRAGGING":
-            organism["HELD"] = {"source": interaction["edge_drag_source_id"]}
-        else:
-            organism["STATE"] = "IDLE"
-            organism["HELD"] = {}
+    if organism["STATE"] != "ACTIVE" and not (is_pointer_start_event or is_pointer_drag_event):
         return
 
     if interaction["ignore_release"] or interaction["press_consumed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["edge_drag_source_id"] = None
-        interaction["edge_drag_current_pos"] = None
+        notify_done(organism)
+        _clear_edge_create_interaction()
         return
 
     if not raw["shift_down"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["edge_drag_source_id"] = None
-        interaction["edge_drag_current_pos"] = None
+        notify_done(organism)
+        _clear_edge_create_interaction()
         return
 
     source_id = interaction["press_node_id"]
     if source_id is None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["edge_drag_source_id"] = None
-        interaction["edge_drag_current_pos"] = None
+        notify_done(organism)
+        _clear_edge_create_interaction()
         return
 
     if is_pointer_drag_event and not derived["drag_threshold_crossed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["edge_drag_source_id"] = None
-        interaction["edge_drag_current_pos"] = None
+        notify_done(organism)
+        _clear_edge_create_interaction()
         return
 
-    if organism["STATE"] != "DRAGGING":
+    if organism["STATE"] != "ACTIVE":
         if not get_permission("START", ["pointer", "edge-create"]):
             return
         interaction["edge_drag_source_id"] = source_id
+        organism["STATE"] = "ACTIVE"
 
-    if not get_permission("HOLD-RESOURCE", ["pointer", "edge-create"]):
-        return
-
-    organism["STATE"] = "DRAGGING"
-    organism["HELD"] = {"source": interaction["edge_drag_source_id"]}
     interaction["edge_drag_current_pos"] = (raw["x"], raw["y"])
     target_id = raw["pointer_node_id"]
     will_create = (
@@ -1279,58 +1265,39 @@ def _run_edge_create_organism(organism):
 
 def _run_group_drag_organism(organism):
     if g["mode"] != "IDLE":
-        if organism["STATE"] != "IDLE":
-            _release_lease(organism["NAME"])
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["group_drag_origin"] = None
+        notify_done(organism)
+        _clear_group_drag_interaction()
         return
 
     if raw["event_name"] == "button-1-release":
-        if organism["STATE"] != "IDLE":
-            _release_lease(organism["NAME"])
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["group_drag_origin"] = None
+        notify_done(organism)
+        _clear_group_drag_interaction()
         return
 
     if raw["event_name"] != "button-1-motion":
-        if organism["STATE"] == "DRAGGING":
-            organism["HELD"] = {"group": list(selection["group_selected_ids"])}
-        else:
-            organism["STATE"] = "IDLE"
-            organism["HELD"] = {}
         return
 
     if interaction["ignore_release"] or interaction["press_consumed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["group_drag_origin"] = None
+        notify_done(organism)
+        _clear_group_drag_interaction()
         return
 
     node_id = interaction["press_node_id"]
     if node_id is None or node_id not in selection["group_selected_ids"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["group_drag_origin"] = None
+        notify_done(organism)
+        _clear_group_drag_interaction()
         return
 
     if not derived["drag_threshold_crossed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["group_drag_origin"] = None
+        if organism["STATE"] != "ACTIVE":
+            organism["STATE"] = "IDLE"
         return
 
-    if organism["STATE"] != "DRAGGING":
+    if organism["STATE"] != "ACTIVE":
         if not get_permission("START", ["pointer", "group-selection"]):
             return
         interaction["group_drag_origin"] = node_id
-
-    if not get_permission("HOLD-RESOURCE", ["pointer", "group-selection"]):
-        return
-
-    organism["STATE"] = "DRAGGING"
-    organism["HELD"] = {"group": list(selection["group_selected_ids"])}
+        organism["STATE"] = "ACTIVE"
 
     dx = raw["x"] - raw_prev["x"]
     dy = raw["y"] - raw_prev["y"]
@@ -1347,56 +1314,40 @@ def _run_group_drag_organism(organism):
 
 def _run_node_drag_organism(organism):
     if g["mode"] != "IDLE":
-        if organism["STATE"] != "IDLE":
-            _release_lease(organism["NAME"])
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["drag_node_id"] = None
+        notify_done(organism)
+        _clear_node_drag_interaction()
         return
 
     if raw["event_name"] == "button-1-release":
-        if organism["STATE"] != "IDLE":
-            _release_lease(organism["NAME"])
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["drag_node_id"] = None
+        notify_done(organism)
+        _clear_node_drag_interaction()
         return
 
     if not derived["dragging"]:
-        if organism["STATE"] == "DRAGGING":
-            organism["HELD"] = {"node": interaction["drag_node_id"]}
-        else:
+        if organism["STATE"] != "ACTIVE":
             organism["STATE"] = "IDLE"
-            organism["HELD"] = {}
         return
 
     if interaction["ignore_release"] or interaction["press_consumed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["drag_node_id"] = None
+        notify_done(organism)
+        _clear_node_drag_interaction()
         return
 
     node_id = derived["press_node_id"]
     if node_id is None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["drag_node_id"] = None
+        notify_done(organism)
+        _clear_node_drag_interaction()
         return
 
-    if organism["STATE"] != "DRAGGING":
+    if organism["STATE"] != "ACTIVE":
         if not get_permission("START", ["pointer", f"node:{node_id}"]):
             return
         interaction["drag_node_id"] = node_id
+        organism["STATE"] = "ACTIVE"
 
     drag_node_id = interaction["drag_node_id"]
     if drag_node_id is None:
         return
-
-    if not get_permission("HOLD-RESOURCE", ["pointer", f"node:{drag_node_id}"]):
-        return
-
-    organism["STATE"] = "DRAGGING"
-    organism["HELD"] = {"node": drag_node_id}
 
     dx = derived["pointer_dx"]
     dy = derived["pointer_dy"]
