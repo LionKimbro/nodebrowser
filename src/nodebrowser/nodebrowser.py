@@ -1083,33 +1083,23 @@ def _get_preview_group_selection_ids(frame_effects):
 
 def _run_pointer_focus_organism(organism):
     if raw["event_name"] != "button-1-press":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if raw["canvas_has_focus"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not get_permission("START", ["pointer"]):
         return
 
-    organism["STATE"] = "HANDLED"
-    organism["HELD"] = {"pointer": True}
     emit_effect("focus-canvas")
     emit_effect("consume-pointer-gesture")
 
 
 def _run_mode_key_organism(organism):
     if raw["event_name"] != "key-press":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not raw["canvas_has_focus"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     mode = None
@@ -1119,15 +1109,11 @@ def _run_mode_key_organism(organism):
         mode = "IDLE"
 
     if mode is None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not get_permission("START", ["interaction-mode"]):
         return
 
-    organism["STATE"] = "HANDLED"
-    organism["HELD"] = {"mode": mode}
     emit_effect("set-mode", {"mode": mode})
 
 
@@ -1169,30 +1155,20 @@ def _run_layout_key_organism(organism):
 
 def _run_node_create_organism(organism):
     if raw["event_name"] != "button-1-release":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if g["mode"] != "CREATE_NODE":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if interaction["ignore_release"] or interaction["press_consumed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if interaction["press_node_id"] is not None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not get_permission("START", ["selection:single"]):
         return
 
-    organism["STATE"] = "HANDLED"
-    organism["HELD"] = {}
     emit_effect("create-node", {"x": raw["x"], "y": raw["y"]})
     next_id = _peek_next_node_id()
     emit_effect("set-single-selection", {"node_id": next_id})
@@ -1489,13 +1465,9 @@ def _run_empty_click_clear_selection_organism(organism):
 
 def _run_delete_organism(organism):
     if raw["event_name"] != "key-press" or raw["key"] != "Delete":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not raw["canvas_has_focus"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     node_ids = []
@@ -1505,15 +1477,11 @@ def _run_delete_organism(organism):
         node_ids = [g["selected_node_id"]]
 
     if not node_ids:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not get_permission("START"):
         return
 
-    organism["STATE"] = "HANDLED"
-    organism["HELD"] = {}
     emit_effect("delete-nodes", {"node_ids": node_ids})
 
 
