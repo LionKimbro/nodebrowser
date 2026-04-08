@@ -49,6 +49,7 @@ def create_app(parent=None, graph_data=None, title="Node Browser", width=960, he
     core.reset_runtime()
     core.use_canvas(canvas)
     core.use_graph_data(graph_data)
+    canvas.focus_set()
 
     app_state = {
         "window": window,

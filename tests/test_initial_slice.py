@@ -80,6 +80,13 @@ def force_canvas_focus():
     core._canvas_has_focus = lambda: True
 
 
+def force_canvas_blur():
+    """Force unfocused-canvas behavior for tests that need it."""
+
+    APP_STATE["app"]["window"].focus_set()
+    core._canvas_has_focus = lambda: False
+
+
 def get_organism(name):
     """Return the organism dict with the given name."""
 
@@ -99,6 +106,10 @@ def test_focus_click_is_consumed_before_create_mode_click():
         core.g["mode"] = "CREATE_NODE"
         return ("next", None)
 
+    def step_blur_canvas():
+        force_canvas_blur()
+        return ("next", None)
+
     def step_click_without_focus():
         app = APP_STATE["app"]
         core.handle_button_1(make_event(app["canvas"], x=120, y=140))
@@ -115,7 +126,7 @@ def test_focus_click_is_consumed_before_create_mode_click():
 
     tkintertester.add_test(
         "focus click is consumed",
-        [step_arm_create_mode, step_click_without_focus, step_assert_consumed],
+        [step_arm_create_mode, step_blur_canvas, step_click_without_focus, step_assert_consumed],
     )
     run_suite()
 

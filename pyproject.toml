@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nodebrowser"
+version = "0.1.0"
+description = "Node browser demo app with judge-pattern interaction experiments."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Robert" },
+]
+dependencies = [
+  "lionscliapp",
+]
+
+[project.scripts]
+nodebrowser = "nodebrowser.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
