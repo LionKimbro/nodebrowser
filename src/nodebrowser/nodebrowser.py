@@ -53,6 +53,8 @@ derived = {
     "hover_node_id": None,
     "press_node_id": None,
     "over_empty": True,
+    "click_completed": False,
+    "click_empty": False,
     "drag_rect": None,
     "drag_distance": 0,
     "drag_threshold_crossed": False,
@@ -160,6 +162,8 @@ def _derived_defaults():
         "hover_node_id": None,
         "press_node_id": None,
         "over_empty": True,
+        "click_completed": False,
+        "click_empty": False,
         "drag_rect": None,
         "drag_distance": 0,
         "drag_threshold_crossed": False,
@@ -205,6 +209,8 @@ def reset_runtime():
     derived["hover_node_id"] = None
     derived["press_node_id"] = None
     derived["over_empty"] = True
+    derived["click_completed"] = False
+    derived["click_empty"] = False
     derived["drag_rect"] = None
     derived["drag_threshold_crossed"] = False
     derived_prev["drag_distance"] = 0
@@ -218,6 +224,8 @@ def reset_runtime():
     derived_prev["hover_node_id"] = None
     derived_prev["press_node_id"] = None
     derived_prev["over_empty"] = True
+    derived_prev["click_completed"] = False
+    derived_prev["click_empty"] = False
     derived_prev["drag_rect"] = None
     derived_prev["drag_threshold_crossed"] = False
 
@@ -255,6 +263,7 @@ def _init_tokenizers():
         _make_tokenizer("drag-lifecycle-tokenizer", _run_drag_lifecycle_tokenizer),
         _make_tokenizer("hit-test-tokenizer", _run_hit_test_tokenizer),
         _make_tokenizer("empty-space-tokenizer", _run_empty_space_tokenizer),
+        _make_tokenizer("click-tokenizer", _run_click_tokenizer),
     ]
 
 
@@ -483,6 +492,24 @@ def _run_hit_test_tokenizer():
 
 def _run_empty_space_tokenizer():
     derived["over_empty"] = raw["pointer_node_id"] is None
+
+
+def _run_click_tokenizer():
+    if raw["event_name"] != "button-1-release":
+        return
+
+    if interaction["ignore_release"] or interaction["press_consumed"]:
+        return
+
+    if derived["drag_threshold_crossed"]:
+        return
+
+    derived["click_completed"] = True
+
+    press_node_id = derived["press_node_id"]
+    hover_node_id = derived["hover_node_id"]
+    if press_node_id is None and derived["over_empty"]:
+        derived["click_empty"] = True
 
 
 def run_cycle():
@@ -1261,28 +1288,13 @@ def _run_marquee_select_organism(organism):
 
 
 def _run_node_click_select_organism(organism):
-    if raw["event_name"] != "button-1-release":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
     if g["mode"] != "IDLE":
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         return
 
-    if interaction["ignore_release"] or interaction["press_consumed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
-    if derived["drag_threshold_crossed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
-    node_id = interaction["press_node_id"]
-    if node_id is None or raw["pointer_node_id"] != node_id:
+    node_id = derived["hover_node_id"]
+    if not derived["click_completed"] or node_id is None:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         return
@@ -1296,32 +1308,12 @@ def _run_node_click_select_organism(organism):
 
 
 def _run_empty_click_clear_selection_organism(organism):
-    if raw["event_name"] != "button-1-release":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
     if g["mode"] != "IDLE":
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         return
 
-    if interaction["ignore_release"] or interaction["press_consumed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
-    if derived["drag_threshold_crossed"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
-    if interaction["press_node_id"] is not None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
-    if raw["pointer_node_id"] is not None:
+    if not derived["click_empty"]:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         return
