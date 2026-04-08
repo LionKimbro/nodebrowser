@@ -247,3 +247,66 @@ def test_delete_removes_selected_node_and_incident_edges():
         [step_focus_canvas, step_select_node, step_delete, step_assert_deleted],
     )
     run_suite()
+
+
+def test_drag_moves_node_and_releases_judge_holds_on_release():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_press_node():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=180, y=160))
+        return ("next", None)
+
+    def step_drag_node():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=210, y=195))
+        return ("next", None)
+
+    def step_assert_dragged():
+        node = APP_STATE["app"]["graph_data"]["nodes"]["node-0001"]
+        if (node["x"], node["y"]) != (210, 195):
+            return ("fail", "drag should move the node by pointer delta")
+        if core.coordination["pointer-owner"] != "node-drag-organism":
+            return ("fail", "judge should grant pointer ownership during drag")
+        if core.coordination["resource-holds"].get("node:node-0001") != "node-drag-organism":
+            return ("fail", "judge should grant node ownership during drag")
+        if core.g["selected_node_id"] is not None:
+            return ("fail", "drag should not imply single selection")
+        return ("next", None)
+
+    def step_release_node():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=210, y=195))
+        return ("next", None)
+
+    def step_assert_released():
+        if core.coordination["pointer-owner"] is not None:
+            return ("fail", "judge should release pointer ownership after drag ends")
+        if core.coordination["resource-holds"]:
+            return ("fail", "judge should clear drag resource holds after release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "drag node",
+        [
+            step_focus_canvas,
+            step_press_node,
+            step_drag_node,
+            step_assert_dragged,
+            step_release_node,
+            step_assert_released,
+        ],
+    )
+    run_suite()

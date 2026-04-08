@@ -9,13 +9,12 @@
     "Canvas attach/detach and redraw lifecycle.",
     "RAW/DERIVED snapshots for the initial event surface.",
     "Minimal judge with resource holds and pointer exclusivity.",
-    "Dict-based organisms for focus, mode key, node creation, node click selection, empty click clear, and delete.",
+    "Dict-based organisms for focus, mode key, node creation, node click selection, single-node drag, empty click clear, and delete.",
     "Real effect queue with explicit apply step.",
     "Rendering for nodes, selection highlight, and existing edges.",
     "tkintertester coverage for the initial slice."
   ],
   "deferred": [
-    "Node drag organism.",
     "Group selection and marquee organism.",
     "Group drag organism.",
     "Edge creation organism and preview rendering.",

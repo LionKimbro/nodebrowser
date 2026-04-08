@@ -185,6 +185,7 @@ def _init_organisms():
         _make_organism("pointer-focus-organism", _run_pointer_focus_organism),
         _make_organism("mode-key-organism", _run_mode_key_organism),
         _make_organism("node-create-organism", _run_node_create_organism),
+        _make_organism("node-drag-organism", _run_node_drag_organism),
         _make_organism("node-click-select-organism", _run_node_click_select_organism),
         _make_organism("empty-click-clear-selection-organism", _run_empty_click_clear_selection_organism),
         _make_organism("delete-organism", _run_delete_organism),
@@ -365,6 +366,7 @@ def run_cycle():
             continue
         _run_organism(organism)
 
+    maintain_judge()
     apply_effects()
     _finish_cycle()
 
@@ -446,6 +448,9 @@ def apply_effects():
             interaction["ignore_release"] = True
         elif effect_type == "set-mode":
             g["mode"] = payload["mode"]
+        elif effect_type == "move-node":
+            move_node_by(payload["node_id"], payload["dx"], payload["dy"])
+            changed_graph = True
         elif effect_type == "create-node":
             node_id = payload.get("node_id") or _generate_node_id()
             graph_data["nodes"][node_id] = {
@@ -641,6 +646,17 @@ def delete_node_ids(node_ids):
         g["selected_node_id"] = None
 
 
+def move_node_by(node_id, dx, dy):
+    """Move a node by delta."""
+
+    node = graph_data["nodes"].get(node_id)
+    if node is None:
+        return
+
+    node["x"] += dx
+    node["y"] += dy
+
+
 def _run_pointer_focus_organism(organism):
     if raw["event_name"] != "button-1-press":
         organism["STATE"] = "IDLE"
@@ -721,6 +737,71 @@ def _run_node_create_organism(organism):
     next_id = _peek_next_node_id()
     emit_effect("set-single-selection", {"node_id": next_id})
     emit_effect("set-mode", {"mode": "IDLE"})
+
+
+def _run_node_drag_organism(organism):
+    if g["mode"] != "IDLE":
+        if organism["STATE"] != "IDLE":
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["drag_node_id"] = None
+        return
+
+    if raw["event_name"] == "button-1-release":
+        if organism["STATE"] != "IDLE":
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["drag_node_id"] = None
+        return
+
+    if raw["event_name"] != "button-1-motion":
+        if organism["STATE"] == "DRAGGING":
+            organism["HELD"] = {"node": interaction["drag_node_id"]}
+        else:
+            organism["STATE"] = "IDLE"
+            organism["HELD"] = {}
+        return
+
+    if interaction["ignore_release"] or interaction["press_consumed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["drag_node_id"] = None
+        return
+
+    node_id = interaction["press_node_id"]
+    if node_id is None:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["drag_node_id"] = None
+        return
+
+    if not derived["drag_threshold_crossed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["drag_node_id"] = None
+        return
+
+    if organism["STATE"] != "DRAGGING":
+        if not get_permission("START", ["pointer", f"node:{node_id}"]):
+            return
+        interaction["drag_node_id"] = node_id
+
+    drag_node_id = interaction["drag_node_id"]
+    if drag_node_id is None:
+        return
+
+    if not get_permission("HOLD-RESOURCE", ["pointer", f"node:{drag_node_id}"]):
+        return
+
+    organism["STATE"] = "DRAGGING"
+    organism["HELD"] = {"node": drag_node_id}
+
+    dx = raw["x"] - raw_prev["x"]
+    dy = raw["y"] - raw_prev["y"]
+    if dx or dy:
+        emit_effect("move-node", {"node_id": drag_node_id, "dx": dx, "dy": dy})
 
 
 def _run_node_click_select_organism(organism):
