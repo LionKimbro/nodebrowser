@@ -310,3 +310,161 @@ def test_drag_moves_node_and_releases_judge_holds_on_release():
         ],
     )
     run_suite()
+
+
+def test_marquee_drag_selects_group_and_releases_judge_holds():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 360, "y": 260},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_press_empty():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=120, y=120))
+        return ("next", None)
+
+    def step_drag_marquee():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=240, y=220))
+        return ("next", None)
+
+    def step_assert_dragging():
+        if core.coordination["pointer-owner"] != "marquee-select-organism":
+            return ("fail", "judge should grant pointer ownership during marquee drag")
+        if core.coordination["resource-holds"].get("group-selection") != "marquee-select-organism":
+            return ("fail", "judge should grant group-selection authority during marquee drag")
+        if core.interaction["marquee_start"] != (120, 120):
+            return ("fail", "marquee should remember its starting corner")
+        if core.interaction["marquee_end"] != (240, 220):
+            return ("fail", "marquee should track the current pointer corner")
+        if core.canvas_items["marquee_item"] is None:
+            return ("fail", "marquee preview should be rendered during drag")
+        return ("next", None)
+
+    def step_release():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=240, y=220))
+        return ("next", None)
+
+    def step_assert_selection():
+        if core.selection["group_selected_ids"] != ["node-0001"]:
+            return ("fail", "marquee release should replace group selection with enclosed nodes")
+        if core.coordination["pointer-owner"] is not None:
+            return ("fail", "judge should release pointer ownership after marquee drag")
+        if core.coordination["resource-holds"]:
+            return ("fail", "judge should clear marquee resource holds after release")
+        if core.canvas_items["marquee_item"] is not None:
+            return ("fail", "marquee preview should be cleared after release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "marquee select",
+        [
+            step_focus_canvas,
+            step_press_empty,
+            step_drag_marquee,
+            step_assert_dragging,
+            step_release,
+            step_assert_selection,
+        ],
+    )
+    run_suite()
+
+
+def test_empty_click_clears_group_selection_too():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 360, "y": 260},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_seed_selection():
+        core.g["selected_node_id"] = "node-0002"
+        core.selection["group_selected_ids"] = ["node-0001"]
+        core.redraw_all()
+        return ("next", None)
+
+    def step_click_empty_space():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=40, y=40))
+        core.handle_button_release_1(make_event(app["canvas"], x=40, y=40))
+        return ("next", None)
+
+    def step_assert_cleared():
+        if core.g["selected_node_id"] is not None:
+            return ("fail", "empty click should clear single selection")
+        if core.selection["group_selected_ids"]:
+            return ("fail", "empty click should clear group selection")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "empty click clears both selections",
+        [
+            step_focus_canvas,
+            step_seed_selection,
+            step_click_empty_space,
+            step_assert_cleared,
+        ],
+    )
+    run_suite()
+
+
+def test_marquee_preview_adds_light_blue_halo_to_enclosed_nodes():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 360, "y": 260},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_start_marquee():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=120, y=120))
+        core.handle_button_motion(make_event(app["canvas"], x=240, y=220))
+        return ("next", None)
+
+    def step_assert_preview_halo():
+        item_ids = core.canvas_items["node_items_by_id"]["node-0001"]
+        if "preview_halo" not in item_ids:
+            return ("fail", "enclosed node should show preview halo during marquee drag")
+        item_ids_2 = core.canvas_items["node_items_by_id"]["node-0002"]
+        if "preview_halo" in item_ids_2:
+            return ("fail", "non-enclosed node should not show preview halo during marquee drag")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "marquee preview halo",
+        [
+            step_focus_canvas,
+            step_start_marquee,
+            step_assert_preview_halo,
+        ],
+    )
+    run_suite()

@@ -7,6 +7,7 @@ canvas_widget = None
 graph_data = None
 widgets = {}
 effects = []
+transient_effects = {}
 callbacks = {
     "generate_node_id": None,
     "on_single_selection_changed": None,
@@ -85,8 +86,11 @@ render = {
     "marquee_outline_color": "white",
     "marquee_dash": [4, 4],
     "group_halo_color": "blue",
-    "group_halo_width": 1,
-    "group_halo_radius_offset": 3,
+    "group_halo_width": 3,
+    "group_halo_radius_offset": 6,
+    "group_preview_halo_color": "#6fd3ff",
+    "group_preview_halo_width": 2,
+    "group_preview_halo_radius_offset": 6,
     "edge_vertical_pull": 60,
     "drag_threshold": 4,
 }
@@ -186,6 +190,7 @@ def _init_organisms():
         _make_organism("mode-key-organism", _run_mode_key_organism),
         _make_organism("node-create-organism", _run_node_create_organism),
         _make_organism("node-drag-organism", _run_node_drag_organism),
+        _make_organism("marquee-select-organism", _run_marquee_select_organism),
         _make_organism("node-click-select-organism", _run_node_click_select_organism),
         _make_organism("empty-click-clear-selection-organism", _run_empty_click_clear_selection_organism),
         _make_organism("delete-organism", _run_delete_organism),
@@ -451,6 +456,10 @@ def apply_effects():
         elif effect_type == "move-node":
             move_node_by(payload["node_id"], payload["dx"], payload["dy"])
             changed_graph = True
+        elif effect_type == "preview-marquee":
+            transient_effects["preview-marquee"] = dict(payload)
+        elif effect_type == "clear-preview-marquee":
+            transient_effects.pop("preview-marquee", None)
         elif effect_type == "create-node":
             node_id = payload.get("node_id") or _generate_node_id()
             graph_data["nodes"][node_id] = {
@@ -464,6 +473,12 @@ def apply_effects():
             changed_selection = True
         elif effect_type == "clear-single-selection":
             g["selected_node_id"] = None
+            changed_selection = True
+        elif effect_type == "clear-group-selection":
+            selection["group_selected_ids"] = []
+            changed_selection = True
+        elif effect_type == "set-group-selection":
+            selection["group_selected_ids"] = list(payload["node_ids"])
             changed_selection = True
         elif effect_type == "delete-nodes":
             delete_node_ids(payload["node_ids"])
@@ -501,6 +516,8 @@ def redraw_all():
     for node_id, node in graph_data["nodes"].items():
         canvas_items["node_items_by_id"][node_id] = _draw_node(node)
 
+    _draw_transient_overlays()
+
 
 def _draw_edge(edge):
     from_node = graph_data["nodes"].get(edge["from"])
@@ -530,6 +547,7 @@ def _draw_node(node):
     x = node["x"]
     y = node["y"]
     radius = render["node_radius"]
+    preview_ids = _get_preview_group_selection_ids()
 
     item_ids = {
         "outer": canvas_widget.create_oval(
@@ -542,6 +560,17 @@ def _draw_node(node):
             fill=render["node_fill_color"],
         ),
     }
+
+    if node["id"] in preview_ids and node["id"] not in selection["group_selected_ids"]:
+        halo_radius = radius + render["group_preview_halo_radius_offset"]
+        item_ids["preview_halo"] = canvas_widget.create_oval(
+            x - halo_radius,
+            y - halo_radius,
+            x + halo_radius,
+            y + halo_radius,
+            outline=render["group_preview_halo_color"],
+            width=render["group_preview_halo_width"],
+        )
 
     if node["id"] in selection["group_selected_ids"]:
         halo_radius = radius + render["group_halo_radius_offset"]
@@ -588,6 +617,13 @@ def find_node_at(x, y):
     return None
 
 
+def set_group_selection(node_ids):
+    """Replace group selection."""
+
+    emit_effect("set-group-selection", {"node_ids": list(node_ids)})
+    apply_effects()
+
+
 def create_node_at(x, y, node_id=None):
     """Create a node and redraw."""
 
@@ -606,6 +642,13 @@ def clear_single_selection():
     """Clear single selection."""
 
     emit_effect("clear-single-selection")
+    apply_effects()
+
+
+def clear_group_selection():
+    """Clear group selection."""
+
+    emit_effect("clear-group-selection")
     apply_effects()
 
 
@@ -655,6 +698,31 @@ def move_node_by(node_id, dx, dy):
 
     node["x"] += dx
     node["y"] += dy
+
+
+def _draw_transient_overlays():
+    marquee = transient_effects.get("preview-marquee")
+    if marquee is None:
+        canvas_items["marquee_item"] = None
+        return
+
+    canvas_items["marquee_item"] = canvas_widget.create_rectangle(
+        marquee["x1"],
+        marquee["y1"],
+        marquee["x2"],
+        marquee["y2"],
+        outline=render["marquee_outline_color"],
+        width=render["marquee_outline_width"],
+        dash=tuple(render["marquee_dash"]),
+    )
+
+
+def _get_preview_group_selection_ids():
+    marquee = transient_effects.get("preview-marquee")
+    if marquee is None or graph_data is None:
+        return set()
+
+    return set(_find_nodes_in_rect(marquee["x1"], marquee["y1"], marquee["x2"], marquee["y2"]))
 
 
 def _run_pointer_focus_organism(organism):
@@ -804,6 +872,85 @@ def _run_node_drag_organism(organism):
         emit_effect("move-node", {"node_id": drag_node_id, "dx": dx, "dy": dy})
 
 
+def _run_marquee_select_organism(organism):
+    if g["mode"] != "IDLE":
+        if organism["STATE"] != "IDLE":
+            emit_effect("clear-preview-marquee")
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["marquee_start"] = None
+        interaction["marquee_end"] = None
+        return
+
+    if raw["event_name"] == "button-1-release":
+        if organism["STATE"] == "DRAGGING":
+            node_ids = _find_nodes_in_rect(
+                interaction["marquee_start"][0],
+                interaction["marquee_start"][1],
+                raw["x"],
+                raw["y"],
+            )
+            emit_effect("set-group-selection", {"node_ids": node_ids})
+            emit_effect("clear-preview-marquee")
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["marquee_start"] = None
+        interaction["marquee_end"] = None
+        return
+
+    if raw["event_name"] != "button-1-motion":
+        if organism["STATE"] == "DRAGGING":
+            organism["HELD"] = {"marquee": True}
+        else:
+            organism["STATE"] = "IDLE"
+            organism["HELD"] = {}
+        return
+
+    if interaction["ignore_release"] or interaction["press_consumed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["marquee_start"] = None
+        interaction["marquee_end"] = None
+        return
+
+    if interaction["press_node_id"] is not None:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["marquee_start"] = None
+        interaction["marquee_end"] = None
+        return
+
+    if not derived["drag_threshold_crossed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["marquee_start"] = None
+        interaction["marquee_end"] = None
+        return
+
+    if organism["STATE"] != "DRAGGING":
+        if not get_permission("START", ["pointer", "group-selection"]):
+            return
+        interaction["marquee_start"] = (interaction["mouse_down_x"], interaction["mouse_down_y"])
+
+    if not get_permission("HOLD-RESOURCE", ["pointer", "group-selection"]):
+        return
+
+    organism["STATE"] = "DRAGGING"
+    organism["HELD"] = {"marquee": True}
+    interaction["marquee_end"] = (raw["x"], raw["y"])
+    emit_effect(
+        "preview-marquee",
+        {
+            "x1": interaction["marquee_start"][0],
+            "y1": interaction["marquee_start"][1],
+            "x2": raw["x"],
+            "y2": raw["y"],
+        },
+    )
+
+
 def _run_node_click_select_organism(organism):
     if raw["event_name"] != "button-1-release":
         organism["STATE"] = "IDLE"
@@ -874,8 +1021,9 @@ def _run_empty_click_clear_selection_organism(organism):
         return
 
     organism["STATE"] = "HANDLED"
-    organism["HELD"] = {"selection": "single"}
+    organism["HELD"] = {"selection": "single", "group-selection": True}
     emit_effect("clear-single-selection")
+    emit_effect("clear-group-selection")
 
 
 def _run_delete_organism(organism):
@@ -916,6 +1064,20 @@ def _ensure_graph_data_shape():
         graph_data["nodes"] = {}
     if "edges" not in graph_data:
         graph_data["edges"] = []
+
+
+def _find_nodes_in_rect(x1, y1, x2, y2):
+    left = min(x1, x2)
+    right = max(x1, x2)
+    top = min(y1, y2)
+    bottom = max(y1, y2)
+    node_ids = []
+
+    for node_id, node in graph_data["nodes"].items():
+        if left <= node["x"] <= right and top <= node["y"] <= bottom:
+            node_ids.append(node_id)
+
+    return node_ids
 
 
 def _ensure_lease(owner):
