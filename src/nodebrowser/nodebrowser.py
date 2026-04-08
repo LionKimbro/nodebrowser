@@ -7,7 +7,6 @@ canvas_widget = None
 graph_data = None
 widgets = {}
 effects = []
-transient_effects = {}
 callbacks = {
     "generate_node_id": None,
     "on_single_selection_changed": None,
@@ -116,6 +115,7 @@ canvas_items = {
     "node_items_by_id": {},
     "edge_items": [],
     "marquee_item": None,
+    "preview_edge_item": None,
 }
 
 coordination = {
@@ -282,6 +282,9 @@ def _init_organisms():
         _make_organism("empty-click-clear-selection-organism", _run_empty_click_clear_selection_organism),
         _make_organism("delete-organism", _run_delete_organism),
     ]
+    for organism in organisms:
+        if organism["NAME"] == "marquee-select-organism":
+            organism["STATE"] = "INACTIVE"
 
 
 def use_canvas(canvas):
@@ -542,7 +545,11 @@ def _run_organism(organism):
 def maintain_judge():
     """Keep coordination state minimal and current."""
 
-    active_names = {organism["NAME"] for organism in organisms if organism["STATE"] != "IDLE"}
+    active_names = {
+        organism["NAME"]
+        for organism in organisms
+        if organism["STATE"] not in ("IDLE", "INACTIVE")
+    }
     stale_names = [name for name in coordination["leases"] if name not in active_names]
 
     for name in stale_names:
@@ -610,11 +617,23 @@ def emit_effect(effect_type, payload=None):
     effects.append({"type": effect_type, "payload": payload})
 
 
+def notify_done(organism):
+    """Tell the judge this organism is no longer engaged."""
+
+    organism["STATE"] = "INACTIVE"
+    organism["HELD"] = {}
+    _release_lease(organism["NAME"])
+
+
 def apply_effects():
     """Apply all queued effects in order."""
 
     changed_selection = False
     changed_graph = False
+    frame_effects = {
+        "preview-marquee": None,
+        "preview-edge": None,
+    }
 
     while effects:
         effect = effects.pop(0)
@@ -638,13 +657,9 @@ def apply_effects():
             make_edge(payload["from"], payload["to"])
             changed_graph = True
         elif effect_type == "preview-marquee":
-            transient_effects["preview-marquee"] = dict(payload)
-        elif effect_type == "clear-preview-marquee":
-            transient_effects.pop("preview-marquee", None)
+            frame_effects["preview-marquee"] = dict(payload)
         elif effect_type == "preview-edge":
-            transient_effects["preview-edge"] = dict(payload)
-        elif effect_type == "clear-preview-edge":
-            transient_effects.pop("preview-edge", None)
+            frame_effects["preview-edge"] = dict(payload)
         elif effect_type == "create-node":
             node_id = payload.get("node_id") or _generate_node_id()
             graph_data["nodes"][node_id] = {
@@ -676,19 +691,24 @@ def apply_effects():
     if changed_graph and callbacks["on_graph_mutated"] is not None:
         callbacks["on_graph_mutated"]()
 
-    redraw_all()
+    redraw_all(frame_effects)
 
 
-def redraw_all():
+def redraw_all(frame_effects=None):
     """Rebuild the canvas projection from graph state."""
 
     if canvas_widget is None:
         return
 
+    if frame_effects is None:
+        frame_effects = {}
+
     canvas_widget.delete("all")
     canvas_items["node_items_by_id"] = {}
     canvas_items["edge_items"] = []
     canvas_items["marquee_item"] = None
+    canvas_items["preview_edge_item"] = None
+    canvas_items["preview_edge_item"] = None
 
     if graph_data is None:
         return
@@ -699,9 +719,9 @@ def redraw_all():
             canvas_items["edge_items"].append(edge_item)
 
     for node_id, node in graph_data["nodes"].items():
-        canvas_items["node_items_by_id"][node_id] = _draw_node(node)
+        canvas_items["node_items_by_id"][node_id] = _draw_node(node, frame_effects)
 
-    _draw_transient_overlays()
+    _draw_transient_overlays(frame_effects)
 
 
 def _draw_edge(edge):
@@ -728,11 +748,11 @@ def _draw_edge(edge):
     )
 
 
-def _draw_node(node):
+def _draw_node(node, frame_effects):
     x = node["x"]
     y = node["y"]
     radius = render["node_radius"]
-    preview_ids = _get_preview_group_selection_ids()
+    preview_ids = _get_preview_group_selection_ids(frame_effects)
 
     item_ids = {
         "outer": canvas_widget.create_oval(
@@ -898,14 +918,9 @@ def make_edge(from_id, to_id):
     graph_data["edges"].append({"from": from_id, "to": to_id})
 
 
-def _draw_transient_overlays():
-    marquee = transient_effects.get("preview-marquee")
-    if derived.get("drag_rect") is None:
-        transient_effects.pop("preview-marquee", None)
-        canvas_items["marquee_item"] = None
-    elif marquee is None:
-        canvas_items["marquee_item"] = None
-    else:
+def _draw_transient_overlays(frame_effects):
+    marquee = frame_effects.get("preview-marquee")
+    if marquee is not None:
         canvas_items["marquee_item"] = canvas_widget.create_rectangle(
             marquee["x1"],
             marquee["y1"],
@@ -915,13 +930,17 @@ def _draw_transient_overlays():
             width=render["marquee_outline_width"],
             dash=tuple(render["marquee_dash"]),
         )
+    else:
+        canvas_items["marquee_item"] = None
 
-    preview_edge = transient_effects.get("preview-edge")
+    preview_edge = frame_effects.get("preview-edge")
     if preview_edge is None:
+        canvas_items["preview_edge_item"] = None
         return
 
     source = graph_data["nodes"].get(preview_edge["from"])
     if source is None:
+        canvas_items["preview_edge_item"] = None
         return
 
     radius = render["node_radius"]
@@ -931,7 +950,7 @@ def _draw_transient_overlays():
     p2 = (preview_edge["to_x"], preview_edge["to_y"] - pull)
     p3 = (preview_edge["to_x"], preview_edge["to_y"])
 
-    canvas_widget.create_line(
+    canvas_items["preview_edge_item"] = canvas_widget.create_line(
         p0[0], p0[1],
         p1[0], p1[1],
         p2[0], p2[1],
@@ -943,12 +962,9 @@ def _draw_transient_overlays():
     )
 
 
-def _get_preview_group_selection_ids():
-    drag_rect = derived.get("drag_rect")
+def _get_preview_group_selection_ids(frame_effects):
+    drag_rect = frame_effects.get("preview-marquee")
     if drag_rect is None or graph_data is None:
-        return set()
-
-    if derived["press_node_id"] is not None:
         return set()
 
     return set(_find_nodes_in_rect(drag_rect["x1"], drag_rect["y1"], drag_rect["x2"], drag_rect["y2"]))
@@ -1039,7 +1055,6 @@ def _run_node_create_organism(organism):
 def _run_edge_create_organism(organism):
     if g["mode"] != "IDLE":
         if organism["STATE"] != "IDLE":
-            emit_effect("clear-preview-edge")
             _release_lease(organism["NAME"])
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
@@ -1053,7 +1068,6 @@ def _run_edge_create_organism(organism):
             source_id = interaction["edge_drag_source_id"]
             if target_id is not None and source_id is not None and target_id != source_id:
                 emit_effect("create-edge", {"from": source_id, "to": target_id})
-            emit_effect("clear-preview-edge")
             _release_lease(organism["NAME"])
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
@@ -1247,44 +1261,40 @@ def _run_node_drag_organism(organism):
 
 
 def _run_marquee_select_organism(organism):
-    if g["mode"] != "IDLE":
-        emit_effect("clear-preview-marquee")
+    if derived["press_started"] and derived["press_node_id"] is None:
+        if not get_permission("START", ["pointer", "group-selection"]):
+            notify_done(organism)
+            return
+        organism["STATE"] = "ARMED"
         return
 
-    is_marquee_drag = derived["drag_rect"] is not None and derived["press_node_id"] is None
-    marquee_finished = derived["drag_ended"] and derived["press_node_id"] is None
-
-    if not is_marquee_drag and not marquee_finished:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        emit_effect("clear-preview-marquee")
-        return
-
-    if is_marquee_drag:
-        request_type = "HOLD-RESOURCE" if coordination["leases"].get(organism["NAME"]) else "START"
-        if not get_permission(request_type, ["pointer", "group-selection"]):
+    if organism["STATE"] == "ARMED":
+        if derived["drag_threshold_crossed"]:
+            organism["STATE"] = "ACTIVE"
+        elif derived["press_released"]:
+            notify_done(organism)
             return
 
-        organism["STATE"] = "DRAGGING"
-        organism["HELD"] = {"marquee": True}
-        interaction["marquee_start"] = (derived["drag_rect"]["x1"], derived["drag_rect"]["y1"])
-        interaction["marquee_end"] = (derived["drag_rect"]["x2"], derived["drag_rect"]["y2"])
-        emit_effect("preview-marquee", derived["drag_rect"])
+    if organism["STATE"] != "ACTIVE":
+        return
 
-    if marquee_finished:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["marquee_start"] = None
-        interaction["marquee_end"] = None
-        emit_effect("clear-preview-marquee")
-        if derived["drag_rect"] is not None:
-            node_ids = _find_nodes_in_rect(
-                derived["drag_rect"]["x1"],
-                derived["drag_rect"]["y1"],
-                derived["drag_rect"]["x2"],
-                derived["drag_rect"]["y2"],
-            )
-            emit_effect("set-group-selection", {"node_ids": node_ids})
+    drag_rect = derived["drag_rect"]
+    if drag_rect is None:
+        notify_done(organism)
+        return
+
+    if derived["press_released"]:
+        node_ids = _find_nodes_in_rect(
+            drag_rect["x1"],
+            drag_rect["y1"],
+            drag_rect["x2"],
+            drag_rect["y2"],
+        )
+        emit_effect("set-group-selection", {"node_ids": node_ids})
+        notify_done(organism)
+        return
+
+    emit_effect("preview-marquee", drag_rect)
 
 
 def _run_node_click_select_organism(organism):

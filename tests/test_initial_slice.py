@@ -80,6 +80,15 @@ def force_canvas_focus():
     core._canvas_has_focus = lambda: True
 
 
+def get_organism(name):
+    """Return the organism dict with the given name."""
+
+    for organism in core.organisms:
+        if organism["NAME"] == name:
+            return organism
+    raise AssertionError(f"missing organism: {name}")
+
+
 def test_focus_click_is_consumed_before_create_mode_click():
     global TEST_GRAPH
 
@@ -343,10 +352,10 @@ def test_marquee_drag_selects_group_and_releases_judge_holds():
             return ("fail", "judge should grant pointer ownership during marquee drag")
         if core.coordination["resource-holds"].get("group-selection") != "marquee-select-organism":
             return ("fail", "judge should grant group-selection authority during marquee drag")
-        if core.interaction["marquee_start"] != (120, 120):
-            return ("fail", "marquee should remember its starting corner")
-        if core.interaction["marquee_end"] != (240, 220):
-            return ("fail", "marquee should track the current pointer corner")
+        if get_organism("marquee-select-organism")["STATE"] != "ACTIVE":
+            return ("fail", "marquee organism should become ACTIVE after threshold is crossed")
+        if core.derived["drag_rect"] != {"x1": 120, "y1": 120, "x2": 240, "y2": 220}:
+            return ("fail", "drag tokenizer should publish the current drag rectangle")
         if core.canvas_items["marquee_item"] is None:
             return ("fail", "marquee preview should be rendered during drag")
         return ("next", None)
@@ -576,7 +585,7 @@ def test_shift_drag_creates_edge_with_preview_and_judge_holds():
             return ("fail", "judge should grant pointer ownership during edge creation")
         if core.coordination["resource-holds"].get("edge-create") != "edge-create-organism":
             return ("fail", "judge should grant edge-create ownership during preview drag")
-        if core.transient_effects.get("preview-edge") is None:
+        if core.canvas_items["preview_edge_item"] is None:
             return ("fail", "edge creation should render a live preview during drag")
         if core.interaction["edge_drag_source_id"] != "node-0001":
             return ("fail", "edge creation should remember its source node")
@@ -595,7 +604,7 @@ def test_shift_drag_creates_edge_with_preview_and_judge_holds():
             return ("fail", "judge should release pointer ownership after edge creation")
         if core.coordination["resource-holds"]:
             return ("fail", "judge should clear edge-create holds after release")
-        if core.transient_effects.get("preview-edge") is not None:
+        if core.canvas_items["preview_edge_item"] is not None:
             return ("fail", "preview edge should clear after release")
         return ("success", None)
 
@@ -648,7 +657,7 @@ def test_shift_drag_release_off_target_cancels_edge_creation():
         edges = APP_STATE["app"]["graph_data"]["edges"]
         if edges:
             return ("fail", "releasing edge-create off-target should not create an edge")
-        if core.transient_effects.get("preview-edge") is not None:
+        if core.canvas_items["preview_edge_item"] is not None:
             return ("fail", "preview edge should clear when edge creation is cancelled")
         return ("success", None)
 
