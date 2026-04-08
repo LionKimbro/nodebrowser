@@ -1041,7 +1041,7 @@ def _run_node_create_organism(organism):
         organism["HELD"] = {}
         return
 
-    if not get_permission("START"):
+    if not get_permission("START", ["selection:single"]):
         return
 
     organism["STATE"] = "HANDLED"
@@ -1298,41 +1298,23 @@ def _run_marquee_select_organism(organism):
 
 
 def _run_node_click_select_organism(organism):
-    if g["mode"] != "IDLE":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
     node_id = derived["hover_node_id"]
     if not derived["click_completed"] or node_id is None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not get_permission("START", ["selection:single"]):
         return
 
-    organism["STATE"] = "HANDLED"
-    organism["HELD"] = {"selection": "single"}
     emit_effect("set-single-selection", {"node_id": node_id})
 
 
 def _run_empty_click_clear_selection_organism(organism):
-    if g["mode"] != "IDLE":
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        return
-
     if not derived["click_empty"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
         return
 
     if not get_permission("START", ["selection:single"]):
         return
 
-    organism["STATE"] = "HANDLED"
-    organism["HELD"] = {"selection": "single", "group-selection": True}
     emit_effect("clear-single-selection")
     emit_effect("clear-group-selection")
 
