@@ -421,6 +421,9 @@ def get_permission(request_type, resources=None):
     if request_type not in ("START", "HOLD-RESOURCE"):
         return False
 
+    if request_type == "START" and _judge_denies_start(owner, requested):
+        return False
+
     for resource in requested:
         held_by = coordination["resource-holds"].get(resource)
         if held_by is not None and held_by != owner:
@@ -433,6 +436,23 @@ def get_permission(request_type, resources=None):
         if resource == "pointer":
             coordination["pointer-owner"] = owner
     return True
+
+
+def _judge_denies_start(owner, requested):
+    """Apply minimal priority policy for START requests."""
+
+    if owner == "edge-create-organism":
+        return False
+
+    if owner in ("node-drag-organism", "group-drag-organism"):
+        if raw["shift_down"] and interaction["press_node_id"] is not None:
+            return True
+
+    if owner == "node-drag-organism":
+        if interaction["press_node_id"] in selection["group_selected_ids"]:
+            return True
+
+    return False
 
 
 def emit_effect(effect_type, payload=None):
@@ -977,12 +997,6 @@ def _run_group_drag_organism(organism):
         interaction["group_drag_origin"] = None
         return
 
-    if raw["shift_down"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["group_drag_origin"] = None
-        return
-
     node_id = interaction["press_node_id"]
     if node_id is None or node_id not in selection["group_selected_ids"]:
         organism["STATE"] = "IDLE"
@@ -1051,20 +1065,8 @@ def _run_node_drag_organism(organism):
         interaction["drag_node_id"] = None
         return
 
-    if raw["shift_down"]:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["drag_node_id"] = None
-        return
-
     node_id = interaction["press_node_id"]
     if node_id is None:
-        organism["STATE"] = "IDLE"
-        organism["HELD"] = {}
-        interaction["drag_node_id"] = None
-        return
-
-    if node_id in selection["group_selected_ids"]:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         interaction["drag_node_id"] = None
