@@ -468,3 +468,78 @@ def test_marquee_preview_adds_light_blue_halo_to_enclosed_nodes():
         ],
     )
     run_suite()
+
+
+def test_group_drag_moves_all_group_selected_nodes():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 260, "y": 220},
+            "node-0003": {"id": "node-0003", "x": 420, "y": 320},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_seed_group_selection():
+        core.selection["group_selected_ids"] = ["node-0001", "node-0002"]
+        core.redraw_all()
+        return ("next", None)
+
+    def step_press_group_node():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=180, y=160))
+        return ("next", None)
+
+    def step_drag_group():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=210, y=195))
+        return ("next", None)
+
+    def step_assert_dragging():
+        graph = APP_STATE["app"]["graph_data"]
+        if (graph["nodes"]["node-0001"]["x"], graph["nodes"]["node-0001"]["y"]) != (210, 195):
+            return ("fail", "group drag should move the pressed group node by pointer delta")
+        if (graph["nodes"]["node-0002"]["x"], graph["nodes"]["node-0002"]["y"]) != (290, 255):
+            return ("fail", "group drag should move every group-selected node by the same delta")
+        if (graph["nodes"]["node-0003"]["x"], graph["nodes"]["node-0003"]["y"]) != (420, 320):
+            return ("fail", "group drag should not move nodes outside the group selection")
+        if core.coordination["pointer-owner"] != "group-drag-organism":
+            return ("fail", "judge should grant pointer ownership to group-drag-organism during drag")
+        if core.coordination["resource-holds"].get("group-selection") != "group-drag-organism":
+            return ("fail", "judge should grant group-selection ownership during group drag")
+        if core.coordination["resource-holds"].get("node:node-0001") is not None:
+            return ("fail", "single-node drag ownership should not be taken during group drag")
+        return ("next", None)
+
+    def step_release():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=210, y=195))
+        return ("next", None)
+
+    def step_assert_released():
+        if core.coordination["pointer-owner"] is not None:
+            return ("fail", "judge should release pointer ownership after group drag")
+        if core.coordination["resource-holds"]:
+            return ("fail", "judge should clear group drag holds after release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "group drag",
+        [
+            step_focus_canvas,
+            step_seed_group_selection,
+            step_press_group_node,
+            step_drag_group,
+            step_assert_dragging,
+            step_release,
+            step_assert_released,
+        ],
+    )
+    run_suite()

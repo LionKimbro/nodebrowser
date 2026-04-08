@@ -189,6 +189,7 @@ def _init_organisms():
         _make_organism("pointer-focus-organism", _run_pointer_focus_organism),
         _make_organism("mode-key-organism", _run_mode_key_organism),
         _make_organism("node-create-organism", _run_node_create_organism),
+        _make_organism("group-drag-organism", _run_group_drag_organism),
         _make_organism("node-drag-organism", _run_node_drag_organism),
         _make_organism("marquee-select-organism", _run_marquee_select_organism),
         _make_organism("node-click-select-organism", _run_node_click_select_organism),
@@ -453,6 +454,9 @@ def apply_effects():
             interaction["ignore_release"] = True
         elif effect_type == "set-mode":
             g["mode"] = payload["mode"]
+        elif effect_type == "move-group":
+            move_group_by(payload["node_ids"], payload["dx"], payload["dy"])
+            changed_graph = True
         elif effect_type == "move-node":
             move_node_by(payload["node_id"], payload["dx"], payload["dy"])
             changed_graph = True
@@ -700,6 +704,13 @@ def move_node_by(node_id, dx, dy):
     node["y"] += dy
 
 
+def move_group_by(node_ids, dx, dy):
+    """Move a group of nodes by delta."""
+
+    for node_id in node_ids:
+        move_node_by(node_id, dx, dy)
+
+
 def _draw_transient_overlays():
     marquee = transient_effects.get("preview-marquee")
     if marquee is None:
@@ -807,6 +818,74 @@ def _run_node_create_organism(organism):
     emit_effect("set-mode", {"mode": "IDLE"})
 
 
+def _run_group_drag_organism(organism):
+    if g["mode"] != "IDLE":
+        if organism["STATE"] != "IDLE":
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["group_drag_origin"] = None
+        return
+
+    if raw["event_name"] == "button-1-release":
+        if organism["STATE"] != "IDLE":
+            _release_lease(organism["NAME"])
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["group_drag_origin"] = None
+        return
+
+    if raw["event_name"] != "button-1-motion":
+        if organism["STATE"] == "DRAGGING":
+            organism["HELD"] = {"group": list(selection["group_selected_ids"])}
+        else:
+            organism["STATE"] = "IDLE"
+            organism["HELD"] = {}
+        return
+
+    if interaction["ignore_release"] or interaction["press_consumed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["group_drag_origin"] = None
+        return
+
+    node_id = interaction["press_node_id"]
+    if node_id is None or node_id not in selection["group_selected_ids"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["group_drag_origin"] = None
+        return
+
+    if not derived["drag_threshold_crossed"]:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["group_drag_origin"] = None
+        return
+
+    if organism["STATE"] != "DRAGGING":
+        if not get_permission("START", ["pointer", "group-selection"]):
+            return
+        interaction["group_drag_origin"] = node_id
+
+    if not get_permission("HOLD-RESOURCE", ["pointer", "group-selection"]):
+        return
+
+    organism["STATE"] = "DRAGGING"
+    organism["HELD"] = {"group": list(selection["group_selected_ids"])}
+
+    dx = raw["x"] - raw_prev["x"]
+    dy = raw["y"] - raw_prev["y"]
+    if dx or dy:
+        emit_effect(
+            "move-group",
+            {
+                "node_ids": list(selection["group_selected_ids"]),
+                "dx": dx,
+                "dy": dy,
+            },
+        )
+
+
 def _run_node_drag_organism(organism):
     if g["mode"] != "IDLE":
         if organism["STATE"] != "IDLE":
@@ -840,6 +919,12 @@ def _run_node_drag_organism(organism):
 
     node_id = interaction["press_node_id"]
     if node_id is None:
+        organism["STATE"] = "IDLE"
+        organism["HELD"] = {}
+        interaction["drag_node_id"] = None
+        return
+
+    if node_id in selection["group_selected_ids"]:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         interaction["drag_node_id"] = None
