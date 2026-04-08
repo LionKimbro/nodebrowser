@@ -173,6 +173,54 @@ def test_key_n_then_click_creates_and_selects_node():
     run_suite()
 
 
+def test_quantized_create_node_snaps_to_grid():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {"nodes": {}, "edges": []}
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_enable_quantizing():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="q"))
+        return ("next", None)
+
+    def step_press_n():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="n"))
+        return ("next", None)
+
+    def step_click_canvas():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=213, y=187))
+        core.handle_button_release_1(make_event(app["canvas"], x=213, y=187))
+        return ("next", None)
+
+    def step_assert_created():
+        nodes = APP_STATE["app"]["graph_data"]["nodes"]
+        if len(nodes) != 1:
+            return ("fail", "expected one quantized node to be created")
+        node = next(iter(nodes.values()))
+        if (node["x"], node["y"]) != (220, 180):
+            return ("fail", "quantized node creation should snap to the grid")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "quantized create node",
+        [
+            step_focus_canvas,
+            step_enable_quantizing,
+            step_press_n,
+            step_click_canvas,
+            step_assert_created,
+        ],
+    )
+    run_suite()
+
+
 def test_click_selects_then_empty_click_clears_selection():
     global TEST_GRAPH
 
@@ -269,6 +317,49 @@ def test_delete_removes_selected_node_and_incident_edges():
     run_suite()
 
 
+def test_q_toggles_quantizing_mode():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {"nodes": {}, "edges": []}
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_press_q_once():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="q"))
+        return ("next", None)
+
+    def step_assert_on():
+        if not core.g["quantizing"]:
+            return ("fail", "q should turn quantizing on")
+        return ("next", None)
+
+    def step_press_q_again():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="q"))
+        return ("next", None)
+
+    def step_assert_off():
+        if core.g["quantizing"]:
+            return ("fail", "q should toggle quantizing back off")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "q toggles quantizing",
+        [
+            step_focus_canvas,
+            step_press_q_once,
+            step_assert_on,
+            step_press_q_again,
+            step_assert_off,
+        ],
+    )
+    run_suite()
+
+
 def test_drag_moves_node_and_releases_judge_holds_on_release():
     global TEST_GRAPH
 
@@ -327,6 +418,68 @@ def test_drag_moves_node_and_releases_judge_holds_on_release():
             step_assert_dragged,
             step_release_node,
             step_assert_released,
+        ],
+    )
+    run_suite()
+
+
+def test_quantized_drag_snaps_node_preview_and_release_position():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 183, "y": 157},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_enable_quantizing():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="q"))
+        return ("next", None)
+
+    def step_press_node():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=183, y=157))
+        return ("next", None)
+
+    def step_drag_node():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=196, y=174))
+        return ("next", None)
+
+    def step_assert_quantized_preview():
+        node = APP_STATE["app"]["graph_data"]["nodes"]["node-0001"]
+        if (node["x"], node["y"]) != (200, 180):
+            return ("fail", "quantized node drag should preview the snapped location")
+        return ("next", None)
+
+    def step_release_node():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=196, y=174))
+        return ("next", None)
+
+    def step_assert_quantized_release():
+        node = APP_STATE["app"]["graph_data"]["nodes"]["node-0001"]
+        if (node["x"], node["y"]) != (200, 180):
+            return ("fail", "quantized node drag should keep the snapped location on release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "quantized node drag",
+        [
+            step_focus_canvas,
+            step_enable_quantizing,
+            step_press_node,
+            step_drag_node,
+            step_assert_quantized_preview,
+            step_release_node,
+            step_assert_quantized_release,
         ],
     )
     run_suite()
@@ -560,6 +713,82 @@ def test_group_drag_moves_all_group_selected_nodes():
             step_assert_dragging,
             step_release,
             step_assert_released,
+        ],
+    )
+    run_suite()
+
+
+def test_quantized_group_drag_snaps_from_pressed_node_and_preserves_offsets():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 183, "y": 157},
+            "node-0002": {"id": "node-0002", "x": 263, "y": 217},
+            "node-0003": {"id": "node-0003", "x": 420, "y": 320},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_enable_quantizing():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="q"))
+        return ("next", None)
+
+    def step_seed_group_selection():
+        core.selection["group_selected_ids"] = ["node-0001", "node-0002"]
+        core.redraw_all()
+        return ("next", None)
+
+    def step_press_group_node():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=183, y=157))
+        return ("next", None)
+
+    def step_drag_group():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=196, y=174))
+        return ("next", None)
+
+    def step_assert_quantized_preview():
+        graph = APP_STATE["app"]["graph_data"]["nodes"]
+        if (graph["node-0001"]["x"], graph["node-0001"]["y"]) != (200, 180):
+            return ("fail", "quantized group drag should snap based on the pressed node")
+        if (graph["node-0002"]["x"], graph["node-0002"]["y"]) != (280, 240):
+            return ("fail", "quantized group drag should preserve relative offsets within the group")
+        if (graph["node-0003"]["x"], graph["node-0003"]["y"]) != (420, 320):
+            return ("fail", "quantized group drag should not move nodes outside the group")
+        return ("next", None)
+
+    def step_release_group():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=196, y=174))
+        return ("next", None)
+
+    def step_assert_quantized_release():
+        graph = APP_STATE["app"]["graph_data"]["nodes"]
+        if (graph["node-0001"]["x"], graph["node-0001"]["y"]) != (200, 180):
+            return ("fail", "quantized group drag should keep the snapped anchor location on release")
+        if (graph["node-0002"]["x"], graph["node-0002"]["y"]) != (280, 240):
+            return ("fail", "quantized group drag should keep snapped relative positions on release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "quantized group drag",
+        [
+            step_focus_canvas,
+            step_enable_quantizing,
+            step_seed_group_selection,
+            step_press_group_node,
+            step_drag_group,
+            step_assert_quantized_preview,
+            step_release_group,
+            step_assert_quantized_release,
         ],
     )
     run_suite()

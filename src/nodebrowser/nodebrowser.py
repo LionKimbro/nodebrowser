@@ -16,6 +16,7 @@ callbacks = {
 g = {
     "mode": "IDLE",
     "selected_node_id": None,
+    "quantizing": False,
     "active_canvas_name": None,
 }
 
@@ -111,6 +112,7 @@ render = {
     "preview_unlink_edge_color": "#ff6b6b",
     "preview_edge_width": 2,
     "drag_threshold": 4,
+    "quantize_step": 20,
 }
 
 canvas_items = {
@@ -188,6 +190,7 @@ def reset_runtime():
 
     g["mode"] = "IDLE"
     g["selected_node_id"] = None
+    g["quantizing"] = False
     g["active_canvas_name"] = None
 
     for target in (raw, raw_prev):
@@ -275,6 +278,7 @@ def _init_organisms():
     organisms[:] = [
         _make_organism("pointer-focus-organism", _run_pointer_focus_organism),
         _make_organism("mode-key-organism", _run_mode_key_organism),
+        _make_organism("quantize-key-organism", _run_quantize_key_organism),
         _make_organism("layout-key-organism", _run_layout_key_organism),
         _make_organism("node-create-organism", _run_node_create_organism),
         _make_organism("edge-create-organism", _run_edge_create_organism),
@@ -623,6 +627,7 @@ def notify_done(organism):
 
     organism["STATE"] = "IDLE"
     organism["HELD"] = {}
+    organism["DATA"] = {}
     _release_lease(organism["NAME"])
 
 
@@ -637,6 +642,27 @@ def _clear_group_drag_interaction():
 
 def _clear_node_drag_interaction():
     interaction["drag_node_id"] = None
+
+
+def _quantize_value(value):
+    step = render["quantize_step"]
+    return int(math.floor((value / step) + 0.5) * step)
+
+
+def _quantize_point(x, y):
+    return _quantize_value(x), _quantize_value(y)
+
+
+def _desired_drag_delta(base_x, base_y):
+    total_dx = raw["x"] - interaction["mouse_down_x"]
+    total_dy = raw["y"] - interaction["mouse_down_y"]
+
+    if not g["quantizing"]:
+        return total_dx, total_dy
+
+    quantized_x = _quantize_value(base_x + total_dx)
+    quantized_y = _quantize_value(base_y + total_dy)
+    return quantized_x - base_x, quantized_y - base_y
 
 
 def apply_effects():
@@ -661,6 +687,8 @@ def apply_effects():
             interaction["ignore_release"] = True
         elif effect_type == "set-mode":
             g["mode"] = payload["mode"]
+        elif effect_type == "toggle-quantizing":
+            g["quantizing"] = not g["quantizing"]
         elif effect_type == "move-group":
             move_group_by(payload["node_ids"], payload["dx"], payload["dy"])
             changed_graph = True
@@ -1127,6 +1155,22 @@ def _run_mode_key_organism(organism):
     emit_effect("set-mode", {"mode": mode})
 
 
+def _run_quantize_key_organism(organism):
+    if raw["event_name"] != "key-press":
+        return
+
+    if not raw["canvas_has_focus"]:
+        return
+
+    if raw["key"] != "q":
+        return
+
+    if not get_permission("START", ["quantize-mode"]):
+        return
+
+    emit_effect("toggle-quantizing")
+
+
 def _run_layout_key_organism(organism):
     if raw["event_name"] != "key-press":
         return
@@ -1179,7 +1223,12 @@ def _run_node_create_organism(organism):
     if not get_permission("START", ["selection:single"]):
         return
 
-    emit_effect("create-node", {"x": raw["x"], "y": raw["y"]})
+    node_x = raw["x"]
+    node_y = raw["y"]
+    if g["quantizing"]:
+        node_x, node_y = _quantize_point(node_x, node_y)
+
+    emit_effect("create-node", {"x": node_x, "y": node_y})
     next_id = _peek_next_node_id()
     emit_effect("set-single-selection", {"node_id": next_id})
     emit_effect("set-mode", {"mode": "IDLE"})
@@ -1297,11 +1346,23 @@ def _run_group_drag_organism(organism):
         if not get_permission("START", ["pointer", "group-selection"]):
             return
         interaction["group_drag_origin"] = node_id
+        organism["DATA"] = {
+            "anchor_origin": (
+                graph_data["nodes"][node_id]["x"],
+                graph_data["nodes"][node_id]["y"],
+            ),
+            "applied_dx": 0,
+            "applied_dy": 0,
+        }
         organism["STATE"] = "ACTIVE"
 
-    dx = raw["x"] - raw_prev["x"]
-    dy = raw["y"] - raw_prev["y"]
+    anchor_x, anchor_y = organism["DATA"]["anchor_origin"]
+    desired_dx, desired_dy = _desired_drag_delta(anchor_x, anchor_y)
+    dx = desired_dx - organism["DATA"]["applied_dx"]
+    dy = desired_dy - organism["DATA"]["applied_dy"]
     if dx or dy:
+        organism["DATA"]["applied_dx"] = desired_dx
+        organism["DATA"]["applied_dy"] = desired_dy
         emit_effect(
             "move-group",
             {
@@ -1343,15 +1404,27 @@ def _run_node_drag_organism(organism):
         if not get_permission("START", ["pointer", f"node:{node_id}"]):
             return
         interaction["drag_node_id"] = node_id
+        organism["DATA"] = {
+            "origin": (
+                graph_data["nodes"][node_id]["x"],
+                graph_data["nodes"][node_id]["y"],
+            ),
+            "applied_dx": 0,
+            "applied_dy": 0,
+        }
         organism["STATE"] = "ACTIVE"
 
     drag_node_id = interaction["drag_node_id"]
     if drag_node_id is None:
         return
 
-    dx = derived["pointer_dx"]
-    dy = derived["pointer_dy"]
+    origin_x, origin_y = organism["DATA"]["origin"]
+    desired_dx, desired_dy = _desired_drag_delta(origin_x, origin_y)
+    dx = desired_dx - organism["DATA"]["applied_dx"]
+    dy = desired_dy - organism["DATA"]["applied_dy"]
     if dx or dy:
+        organism["DATA"]["applied_dx"] = desired_dx
+        organism["DATA"]["applied_dy"] = desired_dy
         emit_effect("move-node", {"node_id": drag_node_id, "dx": dx, "dy": dy})
 
 
