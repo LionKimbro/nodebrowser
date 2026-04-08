@@ -586,9 +586,25 @@ def test_shift_drag_creates_edge_with_preview_and_judge_holds():
         core.handle_button_1(make_event(app["canvas"], x=180, y=160, state=1))
         return ("next", None)
 
+    def step_assert_preview_on_press():
+        if core.coordination["pointer-owner"] != "edge-create-organism":
+            return ("fail", "judge should grant pointer ownership as soon as edge creation starts")
+        if core.coordination["resource-holds"].get("edge-create") != "edge-create-organism":
+            return ("fail", "judge should grant edge-create ownership on shift-press")
+        if core.canvas_items["preview_edge_item"] is None:
+            return ("fail", "edge preview should appear even before the pointer moves")
+        if core.interaction["edge_drag_source_id"] != "node-0001":
+            return ("fail", "edge creation should remember its source node on press")
+        return ("next", None)
+
     def step_drag_preview():
         app = APP_STATE["app"]
         core.handle_button_motion(make_event(app["canvas"], x=340, y=260, state=1))
+        return ("next", None)
+
+    def step_repeat_shift_without_motion():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="Shift_L", state=1))
         return ("next", None)
 
     def step_assert_preview():
@@ -600,6 +616,9 @@ def test_shift_drag_creates_edge_with_preview_and_judge_holds():
             return ("fail", "edge creation should render a live preview during drag")
         if core.interaction["edge_drag_source_id"] != "node-0001":
             return ("fail", "edge creation should remember its source node")
+        preview_color = APP_STATE["app"]["canvas"].itemcget(core.canvas_items["preview_edge_item"], "fill")
+        if preview_color != core.render["preview_create_edge_color"]:
+            return ("fail", "create-edge preview should render in green")
         return ("next", None)
 
     def step_release_on_target():
@@ -624,7 +643,9 @@ def test_shift_drag_creates_edge_with_preview_and_judge_holds():
         [
             step_focus_canvas,
             step_press_source,
+            step_assert_preview_on_press,
             step_drag_preview,
+            step_repeat_shift_without_motion,
             step_assert_preview,
             step_release_on_target,
             step_assert_edge_created,
@@ -680,6 +701,211 @@ def test_shift_drag_release_off_target_cancels_edge_creation():
             step_drag_preview,
             step_release_off_target,
             step_assert_cancelled,
+        ],
+    )
+    run_suite()
+
+
+def test_shift_drag_existing_edge_unlinks_and_preview_turns_red():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 180, "y": 160},
+            "node-0002": {"id": "node-0002", "x": 340, "y": 260},
+        },
+        "edges": [
+            {"from": "node-0001", "to": "node-0002"},
+        ],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_press_source():
+        app = APP_STATE["app"]
+        core.handle_button_1(make_event(app["canvas"], x=180, y=160, state=1))
+        return ("next", None)
+
+    def step_drag_to_existing_target():
+        app = APP_STATE["app"]
+        core.handle_button_motion(make_event(app["canvas"], x=340, y=260, state=1))
+        return ("next", None)
+
+    def step_assert_red_preview():
+        preview_item = core.canvas_items["preview_edge_item"]
+        if preview_item is None:
+            return ("fail", "existing edge toggle should still show a live preview")
+        preview_color = APP_STATE["app"]["canvas"].itemcget(preview_item, "fill")
+        if preview_color != core.render["preview_unlink_edge_color"]:
+            return ("fail", "unlink preview should render in red")
+        return ("next", None)
+
+    def step_release_on_existing_target():
+        app = APP_STATE["app"]
+        core.handle_button_release_1(make_event(app["canvas"], x=340, y=260, state=1))
+        return ("next", None)
+
+    def step_assert_unlinked():
+        if APP_STATE["app"]["graph_data"]["edges"]:
+            return ("fail", "shift-dragging an existing edge should remove it")
+        if core.canvas_items["preview_edge_item"] is not None:
+            return ("fail", "unlink preview should clear after release")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "edge unlink toggle",
+        [
+            step_focus_canvas,
+            step_press_source,
+            step_drag_to_existing_target,
+            step_assert_red_preview,
+            step_release_on_existing_target,
+            step_assert_unlinked,
+        ],
+    )
+    run_suite()
+
+
+def test_h_and_v_align_group_selection_to_single_selection_anchor():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 100, "y": 100},
+            "node-0002": {"id": "node-0002", "x": 220, "y": 160},
+            "node-0003": {"id": "node-0003", "x": 340, "y": 280},
+            "node-0004": {"id": "node-0004", "x": 480, "y": 420},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_seed_group_selection():
+        core.selection["group_selected_ids"] = ["node-0001", "node-0002", "node-0003"]
+        core.g["selected_node_id"] = "node-0002"
+        return ("next", None)
+
+    def step_press_h():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="h"))
+        return ("next", None)
+
+    def step_assert_h():
+        graph = APP_STATE["app"]["graph_data"]["nodes"]
+        expected_y = 160
+        for node_id in ("node-0001", "node-0002", "node-0003"):
+            if graph[node_id]["y"] != expected_y:
+                return ("fail", "h should align group-selected nodes to the selected node y coordinate")
+        if graph["node-0004"]["y"] != 420:
+            return ("fail", "h should not move unselected nodes")
+        return ("next", None)
+
+    def step_press_v():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="v"))
+        return ("next", None)
+
+    def step_assert_v():
+        graph = APP_STATE["app"]["graph_data"]["nodes"]
+        expected_x = 220
+        for node_id in ("node-0001", "node-0002", "node-0003"):
+            if graph[node_id]["x"] != expected_x:
+                return ("fail", "v should align group-selected nodes to the selected node x coordinate")
+        if graph["node-0004"]["x"] != 480:
+            return ("fail", "v should not move unselected nodes")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "align nodes with h and v around single selection",
+        [
+            step_focus_canvas,
+            step_seed_group_selection,
+            step_press_h,
+            step_assert_h,
+            step_press_v,
+            step_assert_v,
+        ],
+    )
+    run_suite()
+
+
+def test_H_and_V_distribute_nodes_evenly_between_extremes():
+    global TEST_GRAPH
+
+    TEST_GRAPH = {
+        "nodes": {
+            "node-0001": {"id": "node-0001", "x": 100, "y": 300},
+            "node-0002": {"id": "node-0002", "x": 170, "y": 220},
+            "node-0003": {"id": "node-0003", "x": 260, "y": 180},
+            "node-0004": {"id": "node-0004", "x": 400, "y": 100},
+            "node-0005": {"id": "node-0005", "x": 520, "y": 360},
+        },
+        "edges": [],
+    }
+    setup_harness()
+
+    def step_focus_canvas():
+        force_canvas_focus()
+        return ("next", None)
+
+    def step_seed_group_selection():
+        core.selection["group_selected_ids"] = ["node-0001", "node-0002", "node-0003", "node-0004"]
+        return ("next", None)
+
+    def step_press_shift_h():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="H"))
+        return ("next", None)
+
+    def step_assert_shift_h():
+        graph = APP_STATE["app"]["graph_data"]["nodes"]
+        if graph["node-0001"]["x"] != 100:
+            return ("fail", "H should keep the leftmost node at its original x")
+        if graph["node-0004"]["x"] != 400:
+            return ("fail", "H should keep the rightmost node at its original x")
+        if graph["node-0002"]["x"] != 200:
+            return ("fail", "H should place the second node one equal step from the left edge")
+        if graph["node-0003"]["x"] != 300:
+            return ("fail", "H should place the third node two equal steps from the left edge")
+        if graph["node-0005"]["x"] != 520:
+            return ("fail", "H should not move unselected nodes")
+        return ("next", None)
+
+    def step_press_shift_v():
+        app = APP_STATE["app"]
+        core.handle_key_press(make_event(app["canvas"], keysym="V"))
+        return ("next", None)
+
+    def step_assert_shift_v():
+        graph = APP_STATE["app"]["graph_data"]["nodes"]
+        if graph["node-0004"]["y"] != 100:
+            return ("fail", "V should keep the topmost node at its original y")
+        if graph["node-0001"]["y"] != 300:
+            return ("fail", "V should keep the bottommost node at its original y")
+        if graph["node-0003"]["y"] != (100 + (200 / 3)):
+            return ("fail", "V should place upper-middle nodes at equal vertical spacing")
+        if graph["node-0002"]["y"] != (100 + (400 / 3)):
+            return ("fail", "V should place lower-middle nodes at equal vertical spacing")
+        if graph["node-0005"]["y"] != 360:
+            return ("fail", "V should not move unselected nodes")
+        return ("success", None)
+
+    tkintertester.add_test(
+        "distribute nodes with H and V",
+        [
+            step_focus_canvas,
+            step_seed_group_selection,
+            step_press_shift_h,
+            step_assert_shift_h,
+            step_press_shift_v,
+            step_assert_shift_v,
         ],
     )
     run_suite()

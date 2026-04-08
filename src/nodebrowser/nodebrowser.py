@@ -107,6 +107,8 @@ render = {
     "group_preview_halo_radius_offset": 6,
     "edge_vertical_pull": 60,
     "preview_edge_color": "#7fdfff",
+    "preview_create_edge_color": "#6dff8a",
+    "preview_unlink_edge_color": "#ff6b6b",
     "preview_edge_width": 2,
     "drag_threshold": 4,
 }
@@ -273,6 +275,7 @@ def _init_organisms():
     organisms[:] = [
         _make_organism("pointer-focus-organism", _run_pointer_focus_organism),
         _make_organism("mode-key-organism", _run_mode_key_organism),
+        _make_organism("layout-key-organism", _run_layout_key_organism),
         _make_organism("node-create-organism", _run_node_create_organism),
         _make_organism("edge-create-organism", _run_edge_create_organism),
         _make_organism("group-drag-organism", _run_group_drag_organism),
@@ -428,8 +431,9 @@ def _preserve_previous_snapshots():
 
 def _update_raw(event_name, event):
     raw["event_name"] = event_name
-    raw["x"] = getattr(event, "x", raw["x"])
-    raw["y"] = getattr(event, "y", raw["y"])
+    if event_name.startswith("button-1"):
+        raw["x"] = getattr(event, "x", raw["x"])
+        raw["y"] = getattr(event, "y", raw["y"])
     raw["key"] = getattr(event, "keysym", None)
     state = getattr(event, "state", 0)
     raw["shift_down"] = bool(state & 0x0001)
@@ -653,8 +657,23 @@ def apply_effects():
         elif effect_type == "move-node":
             move_node_by(payload["node_id"], payload["dx"], payload["dy"])
             changed_graph = True
+        elif effect_type == "align-nodes-horizontal":
+            align_nodes_horizontal(payload["node_ids"], payload.get("anchor_node_id"))
+            changed_graph = True
+        elif effect_type == "distribute-nodes-horizontal":
+            distribute_nodes_horizontal(payload["node_ids"])
+            changed_graph = True
+        elif effect_type == "align-nodes-vertical":
+            align_nodes_vertical(payload["node_ids"], payload.get("anchor_node_id"))
+            changed_graph = True
+        elif effect_type == "distribute-nodes-vertical":
+            distribute_nodes_vertical(payload["node_ids"])
+            changed_graph = True
         elif effect_type == "create-edge":
             make_edge(payload["from"], payload["to"])
+            changed_graph = True
+        elif effect_type == "delete-edge":
+            delete_edge(payload["from"], payload["to"])
             changed_graph = True
         elif effect_type == "preview-marquee":
             frame_effects["preview-marquee"] = dict(payload)
@@ -912,10 +931,102 @@ def move_group_by(node_ids, dx, dy):
         move_node_by(node_id, dx, dy)
 
 
+def _get_nodes_by_id(node_ids):
+    return [
+        graph_data["nodes"][node_id]
+        for node_id in node_ids
+        if node_id in graph_data["nodes"]
+    ]
+
+
+def align_nodes_horizontal(node_ids, anchor_node_id=None):
+    """Set selected node y coordinates to the anchor y or their average."""
+
+    nodes = _get_nodes_by_id(node_ids)
+    if not nodes:
+        return
+
+    if anchor_node_id is not None and anchor_node_id in graph_data["nodes"]:
+        average_y = graph_data["nodes"][anchor_node_id]["y"]
+    else:
+        average_y = sum(node["y"] for node in nodes) / len(nodes)
+    for node in nodes:
+        node["y"] = average_y
+
+
+def align_nodes_vertical(node_ids, anchor_node_id=None):
+    """Set selected node x coordinates to the anchor x or their average."""
+
+    nodes = _get_nodes_by_id(node_ids)
+    if not nodes:
+        return
+
+    if anchor_node_id is not None and anchor_node_id in graph_data["nodes"]:
+        average_x = graph_data["nodes"][anchor_node_id]["x"]
+    else:
+        average_x = sum(node["x"] for node in nodes) / len(nodes)
+    for node in nodes:
+        node["x"] = average_x
+
+
+def distribute_nodes_horizontal(node_ids):
+    """Evenly distribute selected x coordinates from leftmost to rightmost."""
+
+    ordered = sorted(
+        _get_nodes_by_id(node_ids),
+        key=lambda node: (node["x"], node["id"]),
+    )
+    if len(ordered) < 3:
+        return
+
+    left_x = ordered[0]["x"]
+    right_x = ordered[-1]["x"]
+    step = (right_x - left_x) / (len(ordered) - 1)
+
+    for index, node in enumerate(ordered[1:-1], start=1):
+        node["x"] = left_x + step * index
+
+
+def distribute_nodes_vertical(node_ids):
+    """Evenly distribute selected y coordinates from topmost to bottommost."""
+
+    ordered = sorted(
+        _get_nodes_by_id(node_ids),
+        key=lambda node: (node["y"], node["id"]),
+    )
+    if len(ordered) < 3:
+        return
+
+    top_y = ordered[0]["y"]
+    bottom_y = ordered[-1]["y"]
+    step = (bottom_y - top_y) / (len(ordered) - 1)
+
+    for index, node in enumerate(ordered[1:-1], start=1):
+        node["y"] = top_y + step * index
+
+
 def make_edge(from_id, to_id):
     """Append an edge to graph data."""
 
     graph_data["edges"].append({"from": from_id, "to": to_id})
+
+
+def delete_edge(from_id, to_id):
+    """Remove one matching edge from graph data if present."""
+
+    for index, edge in enumerate(graph_data["edges"]):
+        if edge["from"] == from_id and edge["to"] == to_id:
+            graph_data["edges"].pop(index)
+            return
+
+
+def has_edge(from_id, to_id):
+    """Return True if the directed edge already exists."""
+
+    for edge in graph_data["edges"]:
+        if edge["from"] == from_id and edge["to"] == to_id:
+            return True
+    return False
 
 
 def _draw_transient_overlays(frame_effects):
@@ -955,7 +1066,7 @@ def _draw_transient_overlays(frame_effects):
         p1[0], p1[1],
         p2[0], p2[1],
         p3[0], p3[1],
-        fill=render["preview_edge_color"],
+        fill=preview_edge["color"],
         smooth=True,
         width=render["preview_edge_width"],
         dash=(4, 4),
@@ -1020,6 +1131,42 @@ def _run_mode_key_organism(organism):
     emit_effect("set-mode", {"mode": mode})
 
 
+def _run_layout_key_organism(organism):
+    if raw["event_name"] != "key-press":
+        return
+
+    if not raw["canvas_has_focus"]:
+        return
+
+    effect_type = None
+    if raw["key"] == "h":
+        effect_type = "align-nodes-horizontal"
+    elif raw["key"] == "H":
+        effect_type = "distribute-nodes-horizontal"
+    elif raw["key"] == "v":
+        effect_type = "align-nodes-vertical"
+    elif raw["key"] == "V":
+        effect_type = "distribute-nodes-vertical"
+
+    if effect_type is None:
+        return
+
+    node_ids = list(selection["group_selected_ids"])
+    if not node_ids:
+        return
+
+    if not get_permission("START", ["graph-layout"]):
+        return
+
+    emit_effect(
+        effect_type,
+        {
+            "node_ids": node_ids,
+            "anchor_node_id": g["selected_node_id"],
+        },
+    )
+
+
 def _run_node_create_organism(organism):
     if raw["event_name"] != "button-1-release":
         organism["STATE"] = "IDLE"
@@ -1067,7 +1214,8 @@ def _run_edge_create_organism(organism):
             target_id = raw["pointer_node_id"]
             source_id = interaction["edge_drag_source_id"]
             if target_id is not None and source_id is not None and target_id != source_id:
-                emit_effect("create-edge", {"from": source_id, "to": target_id})
+                effect_type = "delete-edge" if has_edge(source_id, target_id) else "create-edge"
+                emit_effect(effect_type, {"from": source_id, "to": target_id})
             _release_lease(organism["NAME"])
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
@@ -1075,7 +1223,10 @@ def _run_edge_create_organism(organism):
         interaction["edge_drag_current_pos"] = None
         return
 
-    if raw["event_name"] != "button-1-motion":
+    is_pointer_start_event = raw["event_name"] == "button-1-press"
+    is_pointer_drag_event = raw["event_name"] == "button-1-motion"
+
+    if organism["STATE"] != "DRAGGING" and not (is_pointer_start_event or is_pointer_drag_event):
         if organism["STATE"] == "DRAGGING":
             organism["HELD"] = {"source": interaction["edge_drag_source_id"]}
         else:
@@ -1105,7 +1256,7 @@ def _run_edge_create_organism(organism):
         interaction["edge_drag_current_pos"] = None
         return
 
-    if not derived["drag_threshold_crossed"]:
+    if is_pointer_drag_event and not derived["drag_threshold_crossed"]:
         organism["STATE"] = "IDLE"
         organism["HELD"] = {}
         interaction["edge_drag_source_id"] = None
@@ -1123,12 +1274,29 @@ def _run_edge_create_organism(organism):
     organism["STATE"] = "DRAGGING"
     organism["HELD"] = {"source": interaction["edge_drag_source_id"]}
     interaction["edge_drag_current_pos"] = (raw["x"], raw["y"])
+    target_id = raw["pointer_node_id"]
+    will_create = (
+        target_id is not None
+        and target_id != interaction["edge_drag_source_id"]
+        and not has_edge(interaction["edge_drag_source_id"], target_id)
+    )
+    will_unlink = (
+        target_id is not None
+        and target_id != interaction["edge_drag_source_id"]
+        and has_edge(interaction["edge_drag_source_id"], target_id)
+    )
+    preview_color = render["preview_edge_color"]
+    if will_create:
+        preview_color = render["preview_create_edge_color"]
+    elif will_unlink:
+        preview_color = render["preview_unlink_edge_color"]
     emit_effect(
         "preview-edge",
         {
             "from": interaction["edge_drag_source_id"],
             "to_x": raw["x"],
             "to_y": raw["y"],
+            "color": preview_color,
         },
     )
 
